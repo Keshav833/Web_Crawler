@@ -1,8 +1,13 @@
 import * as cheerio from "cheerio";
+import { createRequire } from "node:module";
+
+type RobotsParser = typeof import("robots-parser").default;
+const robotsParser: RobotsParser = createRequire(import.meta.url)("robots-parser");
 
 const MAX_DEPTH = 2;
-const startUrl = "https://vercel.com";
+const startUrl = "https://www.scrapethissite.com";
 const startDomain = new URL(startUrl).hostname;
+const USER_AGENT = "MyCrawler/1.0";
 
 type QueueItem = {
   url: string;
@@ -18,6 +23,28 @@ const queue: QueueItem[] = [
 
 const visited = new Set<string>();
 
+async function getRobotsParser(startUrl: string) {
+  const origin = new URL(startUrl).origin;
+
+  const robotsUrl = `${origin}/robots.txt`;
+
+  try {
+    const response = await fetch(robotsUrl);
+
+    if (!response.ok) {
+      console.log("robots.txt not found or unavailable");
+      return null;
+    }
+
+    const robotsText = await response.text();
+
+    return robotsParser(robotsUrl, robotsText);
+  } catch (error) {
+    console.log("Could not fetch robots.txt");
+
+    return null;
+  }
+}
 
 function normalizeUrl(rawUrl: string, baseUrl: string): string | null {
   try {
@@ -53,6 +80,9 @@ function normalizeUrl(rawUrl: string, baseUrl: string): string | null {
 }
 
 async function crawl() {
+  const robots = await getRobotsParser(startUrl);
+
+   
   while (queue.length > 0) {
     const currentUrl = queue.shift();
 
@@ -66,9 +96,13 @@ async function crawl() {
       continue;
     }
 
+    if (robots && !robots.isAllowed(url, USER_AGENT)) {
+   console.log(`Blocked by robots.txt: ${url}`);
+   continue;
+   }
     visited.add(url);
 
-    // console.log("\nCrawling:", currentUrl);
+   
 
     try {
       const response = await fetch(url);
@@ -90,9 +124,7 @@ async function crawl() {
         const href = $(element).attr("href");
 
         if (!href) return;
-
-        try {
-          const normalizedUrl = normalizeUrl(href, url);
+        const normalizedUrl = normalizeUrl(href, url);
 
             if (!normalizedUrl) return;
 
@@ -109,9 +141,6 @@ async function crawl() {
               });
             }
           }
-        } catch {
-          // Ignore invalid URLs
-        }
       });
 
     } catch (error) {
