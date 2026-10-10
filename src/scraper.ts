@@ -18,6 +18,40 @@ const queue: QueueItem[] = [
 
 const visited = new Set<string>();
 
+
+function normalizeUrl(rawUrl: string, baseUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl, baseUrl);
+
+    // Only allow HTTP and HTTPS
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+
+    // Remove fragment
+    url.hash = "";
+
+    // Remove common tracking parameters
+    const trackingParams = [
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_term",
+      "utm_content",
+      "fbclid",
+      "gclid",
+    ];
+
+    for (const param of trackingParams) {
+      url.searchParams.delete(param);
+    }
+
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 async function crawl() {
   while (queue.length > 0) {
     const currentUrl = queue.shift();
@@ -58,14 +92,15 @@ async function crawl() {
         if (!href) return;
 
         try {
-          const absoluteUrl = new URL(href, url);
+          const normalizedUrl = normalizeUrl(href, url);
+
+            if (!normalizedUrl) return;
 
           // Only crawl the same domain
           if (
-            absoluteUrl.hostname ===
-            startDomain
+            new URL(normalizedUrl).hostname === startDomain
           ) {
-            const normalizedUrl = absoluteUrl.href;
+            // const normalizedUrl = absoluteUrl.href;
 
             if (!visited.has(normalizedUrl) && depth < MAX_DEPTH) {
               queue.push({
@@ -84,5 +119,7 @@ async function crawl() {
     }
   }
 }
+
+
 
 crawl();
