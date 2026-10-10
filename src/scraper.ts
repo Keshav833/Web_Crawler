@@ -5,7 +5,9 @@ type RobotsParser = typeof import("robots-parser").default;
 const robotsParser: RobotsParser = createRequire(import.meta.url)("robots-parser");
 
 const MAX_DEPTH = 2;
-const startUrl = "https://www.scrapethissite.com";
+const MAX_ATTEMPTS = 3;
+const REQUEST_TIMEOUT = 5000;
+const startUrl = "https://www.vercel.com";
 const startDomain = new URL(startUrl).hostname;
 const USER_AGENT = "MyCrawler/1.0";
 
@@ -22,6 +24,42 @@ const queue: QueueItem[] = [
 ];
 
 const visited = new Set<string>();
+
+async function fetchPage(url: string) {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, REQUEST_TIMEOUT);
+
+    try {
+      console.log(`Fetching ${url} (attempt ${attempt})`);
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.text();
+
+    } catch (error) {
+      console.log(`Attempt ${attempt} failed for ${url}`);
+
+      if (attempt === MAX_ATTEMPTS) {
+        throw error;
+      }
+
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error("Unexpected fetch failure");
+}
 
 async function getRobotsParser(startUrl: string) {
   const origin = new URL(startUrl).origin;
@@ -105,14 +143,8 @@ async function crawl() {
    
 
     try {
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        console.log("Failed:", response.status);
-        continue;
-      }
-
-      const html = await response.text();
+            
+        const html = await fetchPage(url);
 
       const $ = cheerio.load(html);
 
