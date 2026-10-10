@@ -1,8 +1,21 @@
 import * as cheerio from "cheerio";
 
+const MAX_DEPTH = 2;
 const startUrl = "https://vercel.com";
+const startDomain = new URL(startUrl).hostname;
 
-const queue: string[] = [startUrl];
+type QueueItem = {
+  url: string;
+  depth: number;
+};
+
+const queue: QueueItem[] = [
+  {
+    url: startUrl,
+    depth: 0,
+  },
+];
+
 const visited = new Set<string>();
 
 async function crawl() {
@@ -11,17 +24,20 @@ async function crawl() {
 
     if (!currentUrl) continue;
 
+    const { url, depth } = currentUrl;
+    console.log(`Crawling: ${url} | Depth: ${depth}`);
+
     // Skip already visited URLs
-    if (visited.has(currentUrl)) {
+    if (visited.has(url)) {
       continue;
     }
 
-    visited.add(currentUrl);
+    visited.add(url);
 
-    console.log("\nCrawling:", currentUrl);
+    // console.log("\nCrawling:", currentUrl);
 
     try {
-      const response = await fetch(currentUrl);
+      const response = await fetch(url);
 
       if (!response.ok) {
         console.log("Failed:", response.status);
@@ -42,17 +58,20 @@ async function crawl() {
         if (!href) return;
 
         try {
-          const absoluteUrl = new URL(href, currentUrl);
+          const absoluteUrl = new URL(href, url);
 
           // Only crawl the same domain
           if (
             absoluteUrl.hostname ===
-            new URL(startUrl).hostname
+            startDomain
           ) {
             const normalizedUrl = absoluteUrl.href;
 
-            if (!visited.has(normalizedUrl)) {
-              queue.push(normalizedUrl);
+            if (!visited.has(normalizedUrl) && depth < MAX_DEPTH) {
+              queue.push({
+                url: normalizedUrl,
+                depth: depth + 1,
+              });
             }
           }
         } catch {
@@ -61,7 +80,7 @@ async function crawl() {
       });
 
     } catch (error) {
-      console.log("Request failed:", currentUrl);
+      console.log("Request failed:", url , error);
     }
   }
 }
