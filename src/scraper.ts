@@ -7,6 +7,8 @@ const robotsParser: RobotsParser = createRequire(import.meta.url)("robots-parser
 const MAX_DEPTH = 2;
 const MAX_ATTEMPTS = 3;
 const REQUEST_TIMEOUT = 5000;
+const REQUEST_DELAY = 1000;
+let lastRequestTime = 0;
 const startUrl = "https://www.vercel.com";
 const startDomain = new URL(startUrl).hostname;
 const USER_AGENT = "MyCrawler/1.0";
@@ -24,6 +26,13 @@ const queue: QueueItem[] = [
 ];
 
 const visited = new Set<string>();
+
+// control how frequently our crawler sends requests.
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 async function fetchPage(url: string) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -140,11 +149,22 @@ async function crawl() {
    }
     visited.add(url);
 
-   
+   await delay(REQUEST_DELAY);
 
     try {
+
+        const now = Date.now();
+
+        const elapsed = now - lastRequestTime;
+
+        if (elapsed < REQUEST_DELAY) {
+            await delay(REQUEST_DELAY - elapsed);
+        }
+
+        lastRequestTime = Date.now();
+
             
-        const html = await fetchPage(url);
+      const html = await fetchPage(url);
 
       const $ = cheerio.load(html);
 
