@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { createRequire } from "node:module";
+import { writeFile } from "node:fs/promises";
 
 type RobotsParser = typeof import("robots-parser").default;
 
@@ -7,7 +8,7 @@ const robotsParser: RobotsParser =
     createRequire(import.meta.url)("robots-parser");
 
 
-let robots: ReturnType<RobotsParser> | null = null;
+let robots: ReturnType<RobotsParser> | null = null ;
 
 let activeWorkers = 0;
 // let pendingTasks = 1;
@@ -19,11 +20,12 @@ const REQUEST_TIMEOUT = 5000;
 const REQUEST_DELAY = 1000;
 let lastRequestTime = 0;
 const CONCURRENCY = 3; //means maximum 3 workers fetching pages simultaneously
-const startUrl = "http://books.tscrape.com/";
+const startUrl = "https://aayushbharti.in/";
 const startDomain = new URL(startUrl).hostname;
 const USER_AGENT = "MyCrawler/1.0";
 const visited = new Set<string>();
 const queued = new Set<string>([startUrl]);
+const results: PageResult[] = [];
 
 type QueueItem = {
     url: string;
@@ -36,6 +38,15 @@ const queue: QueueItem[] = [
         depth: 0,
     },
 ];
+
+//defines the data we want to collect from each page
+type PageResult = {
+    url: string;
+    title: string;
+    description: string;
+    headings: string[];
+    linksCount: number;
+};
 
 //function that repeatedly takes one job from the queue and processes it
 async function processUrl(item: QueueItem, id: number) {
@@ -65,7 +76,27 @@ async function processUrl(item: QueueItem, id: number) {
         const html = await fetchPage(url);
         const $ = cheerio.load(html);
 
-        console.log("Title:", $("title").text().trim());
+        const title = $("title").text().trim();
+        const description =
+            $('meta[name="description"]').attr("content")?.trim() ?? "";
+
+        const headings = $("h1, h2, h3")
+            .map((_, element) => $(element).text().trim())
+            .get()
+            .filter(Boolean);
+
+        const linksCount = $("a[href]").length;
+
+        results.push({
+            url,
+            title,
+            description,
+            headings,
+            linksCount,
+        });
+
+        console.log(`Scraped: ${title}`);
+
 
         if (depth >= MAX_DEPTH) {
             return;
@@ -228,22 +259,26 @@ function normalizeUrl(rawUrl: string, baseUrl: string): string | null {
 }
 
 async function crawl() {
-    robots = await getRobotsParser(startUrl);
+  robots = await getRobotsParser(startUrl);
 
-    while (queue.length > 0) {
-        const batch = queue.splice(0, CONCURRENCY);
+  while (queue.length > 0) {
+    const batch = queue.splice(0, CONCURRENCY);
 
-        await Promise.all(
-            batch.map((item, index) =>
-                processUrl(item, index + 1)
-            )
-        );
-    }
+    await Promise.all(
+      batch.map((item, index) =>
+        processUrl(item, index + 1)
+      )
+    );
+  }
 
-    console.log("Crawling finished.");
+  await writeFile(
+    "results.json",
+    JSON.stringify(results, null, 2),
+    "utf-8"
+  );
+
+  console.log(`Crawling finished. Pages scraped: ${results.length}`);
+  console.log("Results saved to results.json");
 }
 
 crawl();
-
-
-
