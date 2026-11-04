@@ -20,7 +20,16 @@ const REQUEST_TIMEOUT = 5000;
 const REQUEST_DELAY = 1000;
 let lastRequestTime = 0;
 const CONCURRENCY = 3; //means maximum 3 workers fetching pages simultaneously
-const startUrl = "https://aayushbharti.in/";
+const UNSUPPORTED_EXTENSIONS = new Set([
+    "xml", "rss", "json", "pdf",
+    "jpg", "jpeg", "png", "gif", "webp", "svg", "ico", "bmp", "avif",
+    "mp3", "mp4", "wav", "avi", "mov", "webm",
+    "css", "js", "mjs",
+    "woff", "woff2", "ttf", "otf", "eot",
+    "zip", "rar", "7z", "gz", "tar",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+]);
+const startUrl = "https://books.toscrape.com/";
 const startDomain = new URL(startUrl).hostname;
 const USER_AGENT = "MyCrawler/1.0";
 const visited = new Set<string>();
@@ -74,6 +83,10 @@ async function processUrl(item: QueueItem, id: number) {
         // await waitForRateLimit();
 
         const html = await fetchPage(url);
+        if (html === null) {
+            return;
+        }
+
         const $ = cheerio.load(html);
 
         const title = $("title").text().trim();
@@ -164,7 +177,14 @@ async function waitForRateLimit(): Promise<void> {
     }
 }
 
-async function fetchPage(url: string) {
+class HttpError extends Error {
+    constructor(readonly status: number) {
+        super(`HTTP ${status}`);
+        this.name = "HttpError";
+    }
+}
+
+async function fetchPage(url: string): Promise<string | null> {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         const controller = new AbortController();
 
@@ -179,18 +199,51 @@ async function fetchPage(url: string) {
 
             const response = await fetch(url, {
                 signal: controller.signal,
+                headers: {
+                    "user-agent": USER_AGENT,
+                },
             });
 
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                throw new HttpError(response.status);
+            }
+
+            const contentType = response.headers.get("content-type");
+            const mediaType = contentType?.split(";")[0]?.trim().toLowerCase();
+
+            if (mediaType !== "text/html" && mediaType !== "application/xhtml+xml") {
+                console.log(
+                    `Skipping ${url}: unsupported Content-Type ${contentType ?? "(missing)"}`
+                );
+                return null;
             }
 
             return await response.text();
 
         } catch (error) {
-            console.log(`Attempt ${attempt} failed for ${url}`);
+            const isTimeout = controller.signal.aborted;
+            const isHttpError = error instanceof HttpError;
+            const isNetworkError = error instanceof TypeError;
+            const retryableHttpError =
+                isHttpError && (error.status === 429 || error.status >= 500);
+            const shouldRetry =
+                isTimeout || isNetworkError || retryableHttpError;
+            const failureType = isTimeout
+                ? "Timeout"
+                : isHttpError
+                  ? `HTTP ${error.status}`
+                  : isNetworkError
+                    ? "Network"
+                    : "Request";
+            const willRetry = shouldRetry && attempt < MAX_ATTEMPTS;
+            const errorMessage =
+                error instanceof Error ? error.message : String(error);
 
-            if (attempt === MAX_ATTEMPTS) {
+            console.log(
+                `${failureType} failure for ${url} on attempt ${attempt}: ${errorMessage}${willRetry ? "; retrying" : ""}`
+            );
+
+            if (!willRetry) {
                 throw error;
             }
 
@@ -206,22 +259,44 @@ async function getRobotsParser(startUrl: string) {
     const origin = new URL(startUrl).origin;
 
     const robotsUrl = `${origin}/robots.txt`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+        controller.abort();
+    }, REQUEST_TIMEOUT);
 
     try {
-        const response = await fetch(robotsUrl);
+        const response = await fetch(robotsUrl, {
+            signal: controller.signal,
+            headers: {
+                "user-agent": USER_AGENT,
+            },
+        });
+
+        if (response.status === 404) {
+            console.log("robots.txt returned 404; proceeding without robots rules");
+            return null;
+        }
 
         if (!response.ok) {
-            console.log("robots.txt not found or unavailable");
-            return null;
+            throw new HttpError(response.status);
         }
 
         const robotsText = await response.text();
 
         return robotsParser(robotsUrl, robotsText);
     } catch (error) {
-        console.log("Could not fetch robots.txt");
-
-        return null;
+        if (controller.signal.aborted) {
+            throw new Error(`Timed out while fetching robots.txt after ${REQUEST_TIMEOUT}ms`);
+        }
+        if (error instanceof HttpError) {
+            throw error;
+        }
+        if (error instanceof TypeError) {
+            throw new Error(`Network error fetching robots.txt: ${error.message}`);
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeout);
     }
 }
 
@@ -231,6 +306,11 @@ function normalizeUrl(rawUrl: string, baseUrl: string): string | null {
 
         // Only allow HTTP and HTTPS
         if (url.protocol !== "http:" && url.protocol !== "https:") {
+            return null;
+        }
+
+        const extension = url.pathname.match(/\.([^.\/]+)$/)?.[1]?.toLowerCase();
+        if (extension && UNSUPPORTED_EXTENSIONS.has(extension)) {
             return null;
         }
 
@@ -259,7 +339,15 @@ function normalizeUrl(rawUrl: string, baseUrl: string): string | null {
 }
 
 async function crawl() {
-  robots = await getRobotsParser(startUrl);
+  try {
+    robots = await getRobotsParser(startUrl);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `Crawling stopped; refusing to fetch pages because robots.txt could not be checked: ${message}`
+    );
+    return;
+  }
 
   while (queue.length > 0) {
     const batch = queue.splice(0, CONCURRENCY);
