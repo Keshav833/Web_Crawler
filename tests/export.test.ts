@@ -119,4 +119,48 @@ describe("JSON export", () => {
             await rm(testDir, { recursive: true, force: true });
         }
     });
+
+    it("writes a CSV crawl result to the configured path", async () => {
+        const testDir = await mkdtemp(join(tmpdir(), "crawler-csv-integration-test-"));
+        const outputPath = join(testDir, "crawl-results.csv");
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (input: RequestInfo | URL) => {
+                const url = new URL(String(input));
+                if (url.pathname === "/robots.txt") {
+                    return new Response("User-agent: *\nAllow: /", { status: 200 });
+                }
+
+                return new Response(
+                    "<html><head><title>Catalog, Books</title></head><body><h1>Books</h1></body></html>",
+                    {
+                        status: 200,
+                        headers: { "content-type": "text/html" },
+                    }
+                );
+            })
+        );
+
+        try {
+            const { crawl } = await loadFreshCrawler();
+            await crawl({
+                format: "csv",
+                maxDepth: 0,
+                fetchPageOptions: { requestDelayMs: 0 },
+                outputPath,
+            });
+
+            const content = await readFile(outputPath, "utf8");
+            expect(content).toBe(
+                [
+                    "url,title,description,headings,linksCount",
+                    'https://books.toscrape.com/,"Catalog, Books",,"[""Books""]",0',
+                    "",
+                ].join("\r\n")
+            );
+        } finally {
+            await rm(testDir, { recursive: true, force: true });
+        }
+    });
 });

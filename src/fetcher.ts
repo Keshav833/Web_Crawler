@@ -79,8 +79,6 @@ export async function fetchPage(
         try {
             await waitForRateLimit(requestDelayMs);
 
-            console.log(`Fetching ${url} (attempt ${attempt})`);
-
             const response = await fetch(url, {
                 signal: controller.signal,
                 headers: {
@@ -122,7 +120,7 @@ export async function fetchPage(
             const errorMessage =
                 error instanceof Error ? error.message : String(error);
 
-            console.log(
+            console.error(
                 `${failureType} failure for ${url} on attempt ${attempt}: ${errorMessage}${willRetry ? "; retrying" : ""}`
             );
 

@@ -84,7 +84,9 @@ describe("crawl worker pool", () => {
                 skippedPages: 0,
                 activeWorkers: 0,
                 outstandingTasks: 0,
+                exportPath: outputPath,
             });
+            expect(stats?.crawlDurationMs).toBeGreaterThanOrEqual(0);
         } finally {
             await rm(testDir, { recursive: true, force: true });
         }
@@ -237,6 +239,155 @@ describe("crawl worker pool", () => {
                 failedPages: 0,
                 skippedPages: 0,
                 activeWorkers: 0,
+                outstandingTasks: 0,
+            });
+            expect(secondRun?.crawlDurationMs).toBeGreaterThanOrEqual(0);
+            expect(secondRun?.exportPath).toBe(outputPath);
+        } finally {
+            await rm(testDir, { recursive: true, force: true });
+        }
+    });
+
+    it("applies a custom start URL, depth, worker count, and page cap", async () => {
+        const testDir = await mkdtemp(join(tmpdir(), "crawler-config-test-"));
+        const outputPath = join(testDir, "results.json");
+        const pageRequests: string[] = [];
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (input: RequestInfo | URL) => {
+                const url = new URL(String(input));
+                if (url.pathname === "/robots.txt") {
+                    return new Response("User-agent: *\nAllow: /", { status: 200 });
+                }
+
+                pageRequests.push(url.href);
+                return pageResponse(
+                    "Custom start",
+                    '<a href="/child">child</a>'
+                );
+            })
+        );
+
+        try {
+            const { crawl } = await loadFreshCrawler();
+            const stats = await crawl({
+                startUrl: "https://custom.example/root",
+                maxDepth: 2,
+                concurrency: 1,
+                maxPages: 1,
+                fetchPageOptions: { requestDelayMs: 0 },
+                outputPath,
+            });
+
+            expect(pageRequests).toEqual(["https://custom.example/root"]);
+            expect(stats).toMatchObject({
+                queuedUrls: 1,
+                discoveredUrls: 2,
+                scrapedPages: 1,
+                maxObservedConcurrency: 1,
+                outstandingTasks: 0,
+            });
+        } finally {
+            await rm(testDir, { recursive: true, force: true });
+        }
+    });
+
+    it("logs periodic progress for longer crawls", async () => {
+        const testDir = await mkdtemp(join(tmpdir(), "crawler-progress-test-"));
+        const outputPath = join(testDir, "results.json");
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (input: RequestInfo | URL) => {
+                const url = new URL(String(input));
+                if (url.pathname === "/robots.txt") {
+                    return new Response("User-agent: *\nAllow: /", { status: 200 });
+                }
+
+                if (url.pathname === "/") {
+                    const links = Array.from(
+                        { length: 9 },
+                        (_, index) => `<a href="/page-${index}">page</a>`
+                    ).join("");
+                    return pageResponse("Home", links);
+                }
+
+                return pageResponse(url.pathname);
+            })
+        );
+
+        try {
+            const { crawl } = await loadFreshCrawler();
+            await crawl({
+                maxPages: 10,
+                fetchPageOptions: { requestDelayMs: 0 },
+                outputPath,
+            });
+
+            expect(console.log).toHaveBeenCalledWith(
+                "Crawl progress:",
+                expect.objectContaining({
+                    completedPages: 10,
+                    activeWorkers: 0,
+                    outstandingTasks: 0,
+                })
+            );
+        } finally {
+            await rm(testDir, { recursive: true, force: true });
+        }
+    });
+
+    it("returns pages and stats from independent concurrent Crawler instances", async () => {
+        const testDir = await mkdtemp(join(tmpdir(), "crawler-api-test-"));
+        const firstOutput = join(testDir, "first.json");
+        const secondOutput = join(testDir, "second.json");
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async (input: RequestInfo | URL) => {
+                const url = new URL(String(input));
+                if (url.pathname === "/robots.txt") {
+                    return new Response("User-agent: *\nAllow: /", { status: 200 });
+                }
+
+                return pageResponse(url.hostname);
+            })
+        );
+
+        try {
+            vi.resetModules();
+            const { Crawler } = await import("../src/index.js");
+            const firstCrawler = new Crawler({
+                startUrl: "https://first.example/",
+                maxDepth: 0,
+                outputPath: firstOutput,
+                fetchPageOptions: { requestDelayMs: 0 },
+            });
+            const secondCrawler = new Crawler({
+                startUrl: "https://second.example/",
+                maxDepth: 0,
+                outputPath: secondOutput,
+                fetchPageOptions: { requestDelayMs: 0 },
+            });
+
+            const [firstResult, secondResult] = await Promise.all([
+                firstCrawler.crawl(),
+                secondCrawler.crawl(),
+            ]);
+            const repeatedFirstResult = await firstCrawler.crawl();
+
+            expect(firstResult?.pages.map((page) => page.url)).toEqual([
+                "https://first.example/",
+            ]);
+            expect(secondResult?.pages.map((page) => page.url)).toEqual([
+                "https://second.example/",
+            ]);
+            expect(firstResult?.stats.scrapedPages).toBe(1);
+            expect(secondResult?.stats.scrapedPages).toBe(1);
+            expect(repeatedFirstResult?.stats).toMatchObject({
+                queuedUrls: 1,
+                scrapedPages: 1,
                 outstandingTasks: 0,
             });
         } finally {
