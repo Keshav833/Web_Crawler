@@ -11,7 +11,6 @@ const robotsParser: RobotsParser =
 let robots: ReturnType<RobotsParser> | null = null ;
 
 let activeWorkers = 0;
-// let pendingTasks = 1;
 
 
 const MAX_DEPTH = 2;
@@ -19,7 +18,7 @@ const MAX_ATTEMPTS = 3;
 const REQUEST_TIMEOUT = 5000;
 const REQUEST_DELAY = 1000;
 let lastRequestTime = 0;
-const CONCURRENCY = 3; //means maximum 3 workers fetching pages simultaneously
+const CONCURRENCY = 3; // Fixed number of URL-processing workers.
 const UNSUPPORTED_EXTENSIONS = new Set([
     "xml", "rss", "json", "pdf",
     "jpg", "jpeg", "png", "gif", "webp", "svg", "ico", "bmp", "avif",
@@ -47,6 +46,42 @@ const queue: QueueItem[] = [
         depth: 0,
     },
 ];
+const crawlStats = {
+    discoveredUrls: 1,
+    queuedUrls: 1,
+    scrapedPages: 0,
+    failedPages: 0,
+    skippedPages: 0,
+    maxObservedConcurrency: 0,
+};
+let outstandingTasks = queue.length;
+const waitingWorkers = new Set<() => void>();
+
+function notifyWaitingWorkers(): void {
+    const waiters = [...waitingWorkers];
+    waitingWorkers.clear();
+    for (const wake of waiters) {
+        wake();
+    }
+}
+
+function waitForQueueChange(): Promise<void> {
+    return new Promise((resolve) => {
+        waitingWorkers.add(resolve);
+    });
+}
+
+function enqueueUrl(item: QueueItem): void {
+    if (visited.has(item.url) || queued.has(item.url)) {
+        return;
+    }
+
+    queued.add(item.url);
+    queue.push(item);
+    crawlStats.queuedUrls++;
+    outstandingTasks++;
+    notifyWaitingWorkers();
+}
 
 //defines the data we want to collect from each page
 type PageResult = {
@@ -57,34 +92,40 @@ type PageResult = {
     linksCount: number;
 };
 
-//function that repeatedly takes one job from the queue and processes it
-async function processUrl(item: QueueItem, id: number) {
+type ProcessOutcome = "scraped" | "skipped" | "failed";
+
+// Processes one URL and returns its outcome.
+async function processUrl(
+    item: QueueItem,
+    id: number
+): Promise<ProcessOutcome> {
     const { url, depth } = item;
 
     if (visited.has(url)) {
-        return;
+        return "skipped";
     }
 
     visited.add(url);
 
-    if (robots && !robots.isAllowed(url, USER_AGENT)) {
-        console.log(`Blocked by robots.txt: ${url}`);
-        return;
-    }
-
     activeWorkers++;
-
-    console.log(
-        `Worker ${id} processing: ${url} | Active: ${activeWorkers}`
+    crawlStats.maxObservedConcurrency = Math.max(
+        crawlStats.maxObservedConcurrency,
+        activeWorkers
     );
 
     try {
-        // Existing rate-limiting logic
-        // await waitForRateLimit();
+        console.log(
+            `Worker ${id} processing: ${url} | Active: ${activeWorkers}`
+        );
+
+        if (robots && !robots.isAllowed(url, USER_AGENT)) {
+            console.log(`Blocked by robots.txt: ${url}`);
+            return "skipped";
+        }
 
         const html = await fetchPage(url);
         if (html === null) {
-            return;
+            return "skipped";
         }
 
         const $ = cheerio.load(html);
@@ -100,6 +141,26 @@ async function processUrl(item: QueueItem, id: number) {
 
         const linksCount = $("a[href]").length;
 
+        if (depth < MAX_DEPTH) {
+            $("a").each((_, element) => {
+                const href = $(element).attr("href");
+                if (!href) return;
+
+                const normalizedUrl = normalizeUrl(href, url);
+                if (!normalizedUrl) return;
+
+                if (new URL(normalizedUrl).hostname !== startDomain) {
+                    return;
+                }
+
+                crawlStats.discoveredUrls++;
+                enqueueUrl({
+                    url: normalizedUrl,
+                    depth: depth + 1,
+                });
+            });
+        }
+
         results.push({
             url,
             title,
@@ -109,37 +170,54 @@ async function processUrl(item: QueueItem, id: number) {
         });
 
         console.log(`Scraped: ${title}`);
+        return "scraped";
+    } catch (error) {
+        console.log(`Worker ${id} failed: ${url}`, error);
+        return "failed";
+    } finally {
+        activeWorkers--;
+    }
+}
 
+async function worker(id: number): Promise<void> {
+    while (true) {
+        const item = queue.shift();
 
-        if (depth >= MAX_DEPTH) {
-            return;
-        }
-
-        $("a").each((_, element) => {
-            const href = $(element).attr("href");
-            if (!href) return;
-
-            const normalizedUrl = normalizeUrl(href, url);
-            if (!normalizedUrl) return;
-
-            if (new URL(normalizedUrl).hostname !== startDomain) {
+        if (!item) {
+            if (outstandingTasks === 0) {
                 return;
             }
 
-            if (!visited.has(normalizedUrl) && !queued.has(normalizedUrl)) {
-                queued.add(normalizedUrl);
+            await waitForQueueChange();
+            continue;
+        }
 
-                queue.push({
-                    url: normalizedUrl,
-                    depth: depth + 1,
-                });
-            }
+        let outcome: ProcessOutcome = "failed";
+        try {
+            outcome = await processUrl(item, id);
+        } catch (error) {
+            console.error(`Worker ${id} encountered an unexpected error`, error);
+        } finally {
+            outstandingTasks--;
+            notifyWaitingWorkers();
+        }
+
+        switch (outcome) {
+            case "scraped":
+                crawlStats.scrapedPages++;
+                break;
+            case "skipped":
+                crawlStats.skippedPages++;
+                break;
+            case "failed":
+                crawlStats.failedPages++;
+                break;
+        }
+
+        console.log("Crawl progress:", {
+            ...crawlStats,
+            activeWorkers,
         });
-    } catch (error) {
-        console.log(`Worker ${id} failed: ${url}`, error);
-    } finally {
-        activeWorkers--;
-
     }
 }
 
@@ -349,15 +427,9 @@ async function crawl() {
     return;
   }
 
-  while (queue.length > 0) {
-    const batch = queue.splice(0, CONCURRENCY);
-
-    await Promise.all(
-      batch.map((item, index) =>
-        processUrl(item, index + 1)
-      )
-    );
-  }
+  await Promise.all(
+    Array.from({ length: CONCURRENCY }, (_, index) => worker(index + 1))
+  );
 
   await writeFile(
     "results.json",
@@ -365,7 +437,11 @@ async function crawl() {
     "utf-8"
   );
 
-  console.log(`Crawling finished. Pages scraped: ${results.length}`);
+  console.log("Crawling finished.");
+  console.log("Crawl statistics:", {
+    ...crawlStats,
+    activeWorkers,
+  });
   console.log("Results saved to results.json");
 }
 
