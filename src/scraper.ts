@@ -1,36 +1,17 @@
 import * as cheerio from "cheerio";
-import { createRequire } from "node:module";
 import { writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { fetchPage, USER_AGENT, type FetchPageOptions } from "./fetcher.js";
+import { normalizeUrl } from "./url.js";
+import { getRobotsParser, type RobotsPolicy } from "./robots.js";
 
-type RobotsParser = typeof import("robots-parser").default;
-
-const robotsParser: RobotsParser =
-    createRequire(import.meta.url)("robots-parser");
-
-
-let robots: ReturnType<RobotsParser> | null = null ;
-
+let robots: RobotsPolicy | null = null;
 let activeWorkers = 0;
 
-
 const MAX_DEPTH = 2;
-const MAX_ATTEMPTS = 3;
-const REQUEST_TIMEOUT = 5000;
-const REQUEST_DELAY = 1000;
-let lastRequestTime = 0;
 const CONCURRENCY = 3; // Fixed number of URL-processing workers.
-const UNSUPPORTED_EXTENSIONS = new Set([
-    "xml", "rss", "json", "pdf",
-    "jpg", "jpeg", "png", "gif", "webp", "svg", "ico", "bmp", "avif",
-    "mp3", "mp4", "wav", "avi", "mov", "webm",
-    "css", "js", "mjs",
-    "woff", "woff2", "ttf", "otf", "eot",
-    "zip", "rar", "7z", "gz", "tar",
-    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-]);
 const startUrl = "https://books.toscrape.com/";
 const startDomain = new URL(startUrl).hostname;
-const USER_AGENT = "MyCrawler/1.0";
 const visited = new Set<string>();
 const queued = new Set<string>([startUrl]);
 const results: PageResult[] = [];
@@ -56,6 +37,7 @@ const crawlStats = {
 };
 let outstandingTasks = queue.length;
 const waitingWorkers = new Set<() => void>();
+let crawlInProgress = false;
 
 function notifyWaitingWorkers(): void {
     const waiters = [...waitingWorkers];
@@ -94,10 +76,27 @@ type PageResult = {
 
 type ProcessOutcome = "scraped" | "skipped" | "failed";
 
+export type CrawlStats = {
+    discoveredUrls: number;
+    queuedUrls: number;
+    scrapedPages: number;
+    failedPages: number;
+    skippedPages: number;
+    maxObservedConcurrency: number;
+    activeWorkers: number;
+    outstandingTasks: number;
+};
+
+export type CrawlOptions = {
+    fetchPageOptions?: FetchPageOptions;
+    outputPath?: string;
+};
+
 // Processes one URL and returns its outcome.
 async function processUrl(
     item: QueueItem,
-    id: number
+    id: number,
+    fetchPageOptions: FetchPageOptions | undefined
 ): Promise<ProcessOutcome> {
     const { url, depth } = item;
 
@@ -123,7 +122,7 @@ async function processUrl(
             return "skipped";
         }
 
-        const html = await fetchPage(url);
+        const html = await fetchPage(url, fetchPageOptions);
         if (html === null) {
             return "skipped";
         }
@@ -179,7 +178,10 @@ async function processUrl(
     }
 }
 
-async function worker(id: number): Promise<void> {
+async function worker(
+    id: number,
+    fetchPageOptions: FetchPageOptions | undefined
+): Promise<void> {
     while (true) {
         const item = queue.shift();
 
@@ -194,7 +196,7 @@ async function worker(id: number): Promise<void> {
 
         let outcome: ProcessOutcome = "failed";
         try {
-            outcome = await processUrl(item, id);
+            outcome = await processUrl(item, id, fetchPageOptions);
         } catch (error) {
             console.error(`Worker ${id} encountered an unexpected error`, error);
         } finally {
@@ -221,202 +223,27 @@ async function worker(id: number): Promise<void> {
     }
 }
 
-// control how frequently our crawler sends requests.
-function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
+function resetCrawlState(): void {
+    robots = null;
+    activeWorkers = 0;
+    visited.clear();
+    queued.clear();
+    queued.add(startUrl);
+    results.length = 0;
+    queue.splice(0, queue.length, { url: startUrl, depth: 0 });
+    crawlStats.discoveredUrls = 1;
+    crawlStats.queuedUrls = 1;
+    crawlStats.scrapedPages = 0;
+    crawlStats.failedPages = 0;
+    crawlStats.skippedPages = 0;
+    crawlStats.maxObservedConcurrency = 0;
+    outstandingTasks = queue.length;
+    waitingWorkers.clear();
 }
 
-let rateLimitQueue: Promise<void> = Promise.resolve();
-
-async function waitForRateLimit(): Promise<void> {
-    let release!: () => void;
-
-    const previous = rateLimitQueue;
-
-    rateLimitQueue = new Promise<void>((resolve) => {
-        release = resolve;
-    });
-
-    await previous;
-
-    try {
-        const now = Date.now();
-        const elapsed = now - lastRequestTime;
-
-        if (elapsed < REQUEST_DELAY) {
-            await delay(REQUEST_DELAY - elapsed);
-        }
-
-        lastRequestTime = Date.now();
-    } finally {
-        release();
-    }
-}
-
-class HttpError extends Error {
-    constructor(readonly status: number) {
-        super(`HTTP ${status}`);
-        this.name = "HttpError";
-    }
-}
-
-async function fetchPage(url: string): Promise<string | null> {
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const controller = new AbortController();
-
-        const timeout = setTimeout(() => {
-            controller.abort();
-        }, REQUEST_TIMEOUT);
-
-        try {
-            await waitForRateLimit();
-
-            console.log(`Fetching ${url} (attempt ${attempt})`);
-
-            const response = await fetch(url, {
-                signal: controller.signal,
-                headers: {
-                    "user-agent": USER_AGENT,
-                },
-            });
-
-            if (!response.ok) {
-                throw new HttpError(response.status);
-            }
-
-            const contentType = response.headers.get("content-type");
-            const mediaType = contentType?.split(";")[0]?.trim().toLowerCase();
-
-            if (mediaType !== "text/html" && mediaType !== "application/xhtml+xml") {
-                console.log(
-                    `Skipping ${url}: unsupported Content-Type ${contentType ?? "(missing)"}`
-                );
-                return null;
-            }
-
-            return await response.text();
-
-        } catch (error) {
-            const isTimeout = controller.signal.aborted;
-            const isHttpError = error instanceof HttpError;
-            const isNetworkError = error instanceof TypeError;
-            const retryableHttpError =
-                isHttpError && (error.status === 429 || error.status >= 500);
-            const shouldRetry =
-                isTimeout || isNetworkError || retryableHttpError;
-            const failureType = isTimeout
-                ? "Timeout"
-                : isHttpError
-                  ? `HTTP ${error.status}`
-                  : isNetworkError
-                    ? "Network"
-                    : "Request";
-            const willRetry = shouldRetry && attempt < MAX_ATTEMPTS;
-            const errorMessage =
-                error instanceof Error ? error.message : String(error);
-
-            console.log(
-                `${failureType} failure for ${url} on attempt ${attempt}: ${errorMessage}${willRetry ? "; retrying" : ""}`
-            );
-
-            if (!willRetry) {
-                throw error;
-            }
-
-        } finally {
-            clearTimeout(timeout);
-        }
-    }
-
-    throw new Error("Unexpected fetch failure");
-}
-
-async function getRobotsParser(startUrl: string) {
-    const origin = new URL(startUrl).origin;
-
-    const robotsUrl = `${origin}/robots.txt`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-        controller.abort();
-    }, REQUEST_TIMEOUT);
-
-    try {
-        const response = await fetch(robotsUrl, {
-            signal: controller.signal,
-            headers: {
-                "user-agent": USER_AGENT,
-            },
-        });
-
-        if (response.status === 404) {
-            console.log("robots.txt returned 404; proceeding without robots rules");
-            return null;
-        }
-
-        if (!response.ok) {
-            throw new HttpError(response.status);
-        }
-
-        const robotsText = await response.text();
-
-        return robotsParser(robotsUrl, robotsText);
-    } catch (error) {
-        if (controller.signal.aborted) {
-            throw new Error(`Timed out while fetching robots.txt after ${REQUEST_TIMEOUT}ms`);
-        }
-        if (error instanceof HttpError) {
-            throw error;
-        }
-        if (error instanceof TypeError) {
-            throw new Error(`Network error fetching robots.txt: ${error.message}`);
-        }
-        throw error;
-    } finally {
-        clearTimeout(timeout);
-    }
-}
-
-function normalizeUrl(rawUrl: string, baseUrl: string): string | null {
-    try {
-        const url = new URL(rawUrl, baseUrl);
-
-        // Only allow HTTP and HTTPS
-        if (url.protocol !== "http:" && url.protocol !== "https:") {
-            return null;
-        }
-
-        const extension = url.pathname.match(/\.([^.\/]+)$/)?.[1]?.toLowerCase();
-        if (extension && UNSUPPORTED_EXTENSIONS.has(extension)) {
-            return null;
-        }
-
-        // Remove fragment
-        url.hash = "";
-
-        // Remove common tracking parameters
-        const trackingParams = [
-            "utm_source",
-            "utm_medium",
-            "utm_campaign",
-            "utm_term",
-            "utm_content",
-            "fbclid",
-            "gclid",
-        ];
-
-        for (const param of trackingParams) {
-            url.searchParams.delete(param);
-        }
-
-        return url.href;
-    } catch {
-        return null;
-    }
-}
-
-async function crawl() {
+async function runCrawl(
+    options: CrawlOptions
+): Promise<CrawlStats | null> {
   try {
     robots = await getRobotsParser(startUrl);
   } catch (error) {
@@ -424,25 +251,54 @@ async function crawl() {
     console.error(
       `Crawling stopped; refusing to fetch pages because robots.txt could not be checked: ${message}`
     );
-    return;
+    return null;
   }
 
   await Promise.all(
-    Array.from({ length: CONCURRENCY }, (_, index) => worker(index + 1))
+    Array.from({ length: CONCURRENCY }, (_, index) =>
+      worker(index + 1, options.fetchPageOptions)
+    )
   );
 
   await writeFile(
-    "results.json",
+    options.outputPath ?? "results.json",
     JSON.stringify(results, null, 2),
     "utf-8"
   );
 
-  console.log("Crawling finished.");
-  console.log("Crawl statistics:", {
+  const stats: CrawlStats = {
     ...crawlStats,
     activeWorkers,
+    outstandingTasks,
+  };
+
+  console.log("Crawling finished.");
+  console.log("Crawl statistics:", {
+    ...stats,
   });
-  console.log("Results saved to results.json");
+  console.log(`Results saved to ${options.outputPath ?? "results.json"}`);
+  return stats;
 }
 
-crawl();
+export async function crawl(
+    options: CrawlOptions = {}
+): Promise<CrawlStats | null> {
+    if (crawlInProgress) {
+        throw new Error("A crawl is already in progress");
+    }
+
+    crawlInProgress = true;
+    resetCrawlState();
+    try {
+        return await runCrawl(options);
+    } finally {
+        crawlInProgress = false;
+    }
+}
+
+if (
+    process.argv[1] &&
+    import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+    void crawl();
+}
