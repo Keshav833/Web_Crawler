@@ -9,17 +9,37 @@
       "import": "./dist/index.js"
     }
   },
+  "files": [
+    "dist"
+  ],
   "type": "module",
+  "description": "A configurable TypeScript crawler with HTTP and optional Playwright backends, robots.txt support, and JSON/CSV exports.",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "crawl": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "web-crawler",
+    "web-scraping",
+    "typescript",
+    "playwright",
+    "cheerio"
+  ],
+  "author": "Keshav Chauhan",
   "license": "ISC",
-  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Keshav833/Web_Crawler.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Keshav833/Web_Crawler/issues"
+  },
+  "homepage": "https://github.com/Keshav833/Web_Crawler#readme",
+  "engines": {
+    "node": ">=20.18.1"
+  },
   "dependencies": {
     "cheerio": "^1.2.0",
     "robots-parser": "^3.0.1"

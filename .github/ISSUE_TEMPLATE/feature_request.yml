@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a focused improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Use case
+      description: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the change and any relevant API or CLI behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: responsible-use
+    attributes:
+      label: Responsible-use considerations
+      description: Explain any impact on robots rules, access controls, request volume, or resource use.
+    validations:
+      required: true
