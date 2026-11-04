@@ -39,6 +39,27 @@ describe("CLI configuration", () => {
                 maxPages: 12,
                 outputPath: "out/crawl.json",
                 format: "json",
+                mode: "http",
+                navigationTimeoutMs: 10_000,
+            },
+        });
+    });
+
+    it("parses browser mode and navigation timeout", () => {
+        expect(
+            parseCliArgs([
+                "--mode=browser",
+                "--concurrency",
+                "2",
+                "--navigation-timeout",
+                "15000",
+            ])
+        ).toMatchObject({
+            kind: "config",
+            config: {
+                mode: "browser",
+                concurrency: 2,
+                navigationTimeoutMs: 15_000,
             },
         });
     });
@@ -69,6 +90,9 @@ describe("CLI configuration", () => {
         ["excessive page limit", ["--max-pages", "10001"], /between 1 and 10000/],
         ["empty output path", ["--output", " "], /must not be empty/],
         ["unsupported format", ["--format", "yaml"], /must be json or csv/],
+        ["unsupported mode", ["--mode", "stealth"], /must be http or browser/],
+        ["too much browser concurrency", ["--mode", "browser", "--concurrency", "4"], /between 1 and 3 in browser mode/],
+        ["invalid navigation timeout", ["--navigation-timeout", "0"], /between 1 and 120000/],
         ["unknown option", ["--verbose"], /Unknown option/],
         ["missing value", ["--url"], /requires a value/],
         ["duplicate option", ["--depth", "1", "--depth", "2"], /only be specified once/],

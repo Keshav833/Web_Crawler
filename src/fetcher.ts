@@ -10,6 +10,8 @@ export type FetchPageOptions = {
     requestDelayMs?: number;
 };
 
+export type ResolvedFetchPageOptions = Required<FetchPageOptions>;
+
 let lastRequestTime = 0;
 let rateLimitQueue: Promise<void> = Promise.resolve();
 
@@ -19,7 +21,7 @@ function delay(ms: number): Promise<void> {
     });
 }
 
-async function waitForRateLimit(requestDelayMs: number): Promise<void> {
+export async function waitForRequestSlot(requestDelayMs: number): Promise<void> {
     let release!: () => void;
 
     const previous = rateLimitQueue;
@@ -44,6 +46,31 @@ async function waitForRateLimit(requestDelayMs: number): Promise<void> {
     }
 }
 
+export function resolveFetchPageOptions(
+    options: FetchPageOptions = {}
+): ResolvedFetchPageOptions {
+    const resolved = {
+        maxAttempts: options.maxAttempts ?? MAX_ATTEMPTS,
+        timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT,
+        requestDelayMs: options.requestDelayMs ?? REQUEST_DELAY,
+    };
+
+    if (!Number.isInteger(resolved.maxAttempts) || resolved.maxAttempts < 1) {
+        throw new RangeError("maxAttempts must be a positive integer");
+    }
+    if (!Number.isFinite(resolved.timeoutMs) || resolved.timeoutMs <= 0) {
+        throw new RangeError("timeoutMs must be a positive number");
+    }
+    if (
+        !Number.isFinite(resolved.requestDelayMs) ||
+        resolved.requestDelayMs < 0
+    ) {
+        throw new RangeError("requestDelayMs must be a non-negative number");
+    }
+
+    return resolved;
+}
+
 export class HttpError extends Error {
     constructor(readonly status: number) {
         super(`HTTP ${status}`);
@@ -55,19 +82,8 @@ export async function fetchPage(
     url: string,
     options: FetchPageOptions = {}
 ): Promise<string | null> {
-    const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
-    const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT;
-    const requestDelayMs = options.requestDelayMs ?? REQUEST_DELAY;
-
-    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-        throw new RangeError("maxAttempts must be a positive integer");
-    }
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-        throw new RangeError("timeoutMs must be a positive number");
-    }
-    if (!Number.isFinite(requestDelayMs) || requestDelayMs < 0) {
-        throw new RangeError("requestDelayMs must be a non-negative number");
-    }
+    const { maxAttempts, timeoutMs, requestDelayMs } =
+        resolveFetchPageOptions(options);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const controller = new AbortController();
@@ -77,7 +93,7 @@ export async function fetchPage(
         }, timeoutMs);
 
         try {
-            await waitForRateLimit(requestDelayMs);
+            await waitForRequestSlot(requestDelayMs);
 
             const response = await fetch(url, {
                 signal: controller.signal,

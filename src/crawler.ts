@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { fetchPage, USER_AGENT, type FetchPageOptions } from "./fetcher.js";
+import { BrowserFetcher } from "./browser-fetcher.js";
 import { exportResults } from "./exporters/index.js";
 import {
     resolveCrawlerConfig,
@@ -44,6 +45,7 @@ const PROGRESS_LOG_INTERVAL = 10;
 export class Crawler {
     private readonly config: CrawlerConfig;
     private readonly fetchPageOptions: FetchPageOptions;
+    private browserFetcher: BrowserFetcher | undefined;
     private robots: RobotsPolicy | null = null;
     private activeWorkers = 0;
     private readonly visited = new Set<string>();
@@ -94,6 +96,11 @@ export class Crawler {
                 return null;
             }
 
+            if (this.config.mode === "browser") {
+                this.browserFetcher = new BrowserFetcher();
+                await this.browserFetcher.initialize();
+            }
+
             const startDomain = new URL(this.config.startUrl).hostname;
             await Promise.all(
                 Array.from(
@@ -128,7 +135,13 @@ export class Crawler {
                 stats,
             };
         } finally {
-            this.crawlInProgress = false;
+            const browserFetcher = this.browserFetcher;
+            this.browserFetcher = undefined;
+            try {
+                await browserFetcher?.close();
+            } finally {
+                this.crawlInProgress = false;
+            }
         }
     }
 
@@ -205,7 +218,14 @@ export class Crawler {
                 return "skipped";
             }
 
-            const html = await fetchPage(url, this.fetchPageOptions);
+            const html = this.browserFetcher
+                ? await this.browserFetcher.fetchPage(url, {
+                      ...this.fetchPageOptions,
+                      timeoutMs:
+                          this.fetchPageOptions.timeoutMs ??
+                          this.config.navigationTimeoutMs,
+                  })
+                : await fetchPage(url, this.fetchPageOptions);
             if (html === null) {
                 return "skipped";
             }

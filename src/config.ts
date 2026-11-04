@@ -6,6 +6,8 @@ export type CrawlerConfig = {
     maxPages: number;
     outputPath: string;
     format: "json" | "csv";
+    mode: "http" | "browser";
+    navigationTimeoutMs: number;
 };
 
 export type CliConfig = CrawlerConfig;
@@ -22,12 +24,16 @@ export const DEFAULT_CRAWLER_CONFIG: CrawlerConfig = {
     maxPages: 1000,
     outputPath: "results.json",
     format: "json",
+    mode: "http",
+    navigationTimeoutMs: 10_000,
 };
 
 const MAX_DEPTH = 10;
 const MAX_CONCURRENCY = 10;
+const MAX_BROWSER_CONCURRENCY = 3;
 const MIN_REQUEST_DELAY_MS = 100;
 const MAX_PAGES = 10000;
+const MAX_NAVIGATION_TIMEOUT_MS = 120_000;
 
 function parseBoundedInteger(
     value: string,
@@ -80,6 +86,14 @@ export function resolveCrawlerConfig(
     ) {
         throw new Error(`--concurrency must be between 1 and ${MAX_CONCURRENCY}`);
     }
+    if (config.mode !== "http" && config.mode !== "browser") {
+        throw new Error("--mode must be http or browser");
+    }
+    if (config.mode === "browser" && config.concurrency > MAX_BROWSER_CONCURRENCY) {
+        throw new Error(
+            `--concurrency must be between 1 and ${MAX_BROWSER_CONCURRENCY} in browser mode`
+        );
+    }
     if (
         !Number.isInteger(config.requestDelayMs) ||
         config.requestDelayMs < MIN_REQUEST_DELAY_MS
@@ -92,6 +106,15 @@ export function resolveCrawlerConfig(
         config.maxPages > MAX_PAGES
     ) {
         throw new Error(`--max-pages must be between 1 and ${MAX_PAGES}`);
+    }
+    if (
+        !Number.isInteger(config.navigationTimeoutMs) ||
+        config.navigationTimeoutMs < 1 ||
+        config.navigationTimeoutMs > MAX_NAVIGATION_TIMEOUT_MS
+    ) {
+        throw new Error(
+            `--navigation-timeout must be between 1 and ${MAX_NAVIGATION_TIMEOUT_MS} milliseconds`
+        );
     }
     if (!config.outputPath.trim()) {
         throw new Error("--output must not be empty");
@@ -117,6 +140,8 @@ export function parseCliArgs(args: string[]): CliParseResult {
         "--max-pages",
         "--output",
         "--format",
+        "--mode",
+        "--navigation-timeout",
     ]);
 
     for (let index = 0; index < args.length; index++) {
@@ -191,6 +216,14 @@ export function parseCliArgs(args: string[]): CliParseResult {
             MAX_PAGES
         );
     }
+    if (values["--navigation-timeout"] !== undefined) {
+        overrides.navigationTimeoutMs = parseBoundedInteger(
+            values["--navigation-timeout"],
+            "--navigation-timeout",
+            1,
+            MAX_NAVIGATION_TIMEOUT_MS
+        );
+    }
     if (values["--output"] !== undefined) {
         overrides.outputPath = values["--output"];
     }
@@ -200,6 +233,12 @@ export function parseCliArgs(args: string[]): CliParseResult {
         throw new Error("--format must be json or csv");
     }
     overrides.format = format;
+
+    const mode = values["--mode"] ?? "http";
+    if (mode !== "http" && mode !== "browser") {
+        throw new Error("--mode must be http or browser");
+    }
+    overrides.mode = mode;
 
     return {
         kind: "config",
@@ -212,12 +251,15 @@ export const CLI_HELP = `Usage: npm run crawl -- [options]
 Options:
   --url <url>              Starting HTTP(S) URL (default: ${DEFAULT_CRAWLER_CONFIG.startUrl})
   --depth <number>         Maximum link depth, 0-10 (default: ${DEFAULT_CRAWLER_CONFIG.maxDepth})
-  --concurrency <number>   Worker count, 1-10 (default: ${DEFAULT_CRAWLER_CONFIG.concurrency})
+  --concurrency <number>   Worker count: 1-10 for HTTP, 1-3 for browser (default: ${DEFAULT_CRAWLER_CONFIG.concurrency})
   --delay <ms>             Minimum request-start interval, at least ${MIN_REQUEST_DELAY_MS} ms (default: ${DEFAULT_CRAWLER_CONFIG.requestDelayMs})
   --max-pages <number>     Maximum unique URLs queued, 1-10000 (default: ${DEFAULT_CRAWLER_CONFIG.maxPages})
   --output <path>           Output file path (default: ${DEFAULT_CRAWLER_CONFIG.outputPath})
   --format <format>         Output format: json or csv (default: ${DEFAULT_CRAWLER_CONFIG.format})
+  --mode <mode>             Fetching backend: http or browser (default: ${DEFAULT_CRAWLER_CONFIG.mode})
+  --navigation-timeout <ms> Browser navigation timeout, 1-120000 ms (default: ${DEFAULT_CRAWLER_CONFIG.navigationTimeoutMs})
   --help, -h                Show this help
 
 Example:
-  npm run crawl -- --url https://books.toscrape.com/ --depth 2 --concurrency 3 --delay 1000 --max-pages 1000 --output results.json --format json`;
+  npm run crawl -- --url https://books.toscrape.com/ --depth 2 --concurrency 3 --delay 1000 --max-pages 1000 --output results.json --format json --mode http
+  npm run crawl -- --url https://example.com/ --mode browser --concurrency 2 --navigation-timeout 15000`;
