@@ -8,9 +8,17 @@ export type FetchPageOptions = {
     maxAttempts?: number;
     timeoutMs?: number;
     requestDelayMs?: number;
+    allowedRedirectHosts?: readonly string[];
+    maxResponseBytes?: number;
 };
 
-export type ResolvedFetchPageOptions = Required<FetchPageOptions>;
+export type ResolvedFetchPageOptions = Required<
+    Pick<
+        FetchPageOptions,
+        "maxAttempts" | "timeoutMs" | "requestDelayMs"
+    >
+> &
+    Pick<FetchPageOptions, "allowedRedirectHosts" | "maxResponseBytes">;
 
 let lastRequestTime = 0;
 let rateLimitQueue: Promise<void> = Promise.resolve();
@@ -46,6 +54,64 @@ export async function waitForRequestSlot(requestDelayMs: number): Promise<void> 
     }
 }
 
+export async function fetchWithRedirectPolicy(
+    url: string,
+    init: RequestInit,
+    allowedRedirectHosts?: readonly string[],
+    beforeRequest?: () => Promise<void>
+): Promise<Response> {
+    if (!allowedRedirectHosts) {
+        await beforeRequest?.();
+        return fetch(url, init);
+    }
+
+    let currentUrl = new URL(url);
+    validateAllowedUrl(currentUrl, allowedRedirectHosts);
+
+    for (let redirectCount = 0; ; redirectCount++) {
+        await beforeRequest?.();
+        const response = await fetch(currentUrl, {
+            ...init,
+            redirect: "manual",
+        });
+        if (response.status < 300 || response.status >= 400) {
+            return response;
+        }
+
+        const location = response.headers.get("location");
+        if (!location) {
+            return response;
+        }
+        if (redirectCount >= 5) {
+            await response.body?.cancel();
+            throw new Error("Too many redirects");
+        }
+
+        const nextUrl = new URL(location, currentUrl);
+        try {
+            validateAllowedUrl(nextUrl, allowedRedirectHosts);
+        } catch (error) {
+            await response.body?.cancel();
+            throw error;
+        }
+        await response.body?.cancel();
+        currentUrl = nextUrl;
+    }
+}
+
+function validateAllowedUrl(url: URL, allowedHosts: readonly string[]): void {
+    const portIsAllowed = url.port === "" || url.port === "443";
+    if (
+        url.protocol !== "https:" ||
+        url.username ||
+        url.password ||
+        !portIsAllowed ||
+        !allowedHosts.includes(url.hostname.toLowerCase())
+    ) {
+        throw new Error("Request or redirect is outside the configured crawl host policy");
+    }
+}
+
 export function resolveFetchPageOptions(
     options: FetchPageOptions = {}
 ): ResolvedFetchPageOptions {
@@ -66,6 +132,13 @@ export function resolveFetchPageOptions(
         resolved.requestDelayMs < 0
     ) {
         throw new RangeError("requestDelayMs must be a non-negative number");
+    }
+    if (
+        options.maxResponseBytes !== undefined &&
+        (!Number.isSafeInteger(options.maxResponseBytes) ||
+            options.maxResponseBytes < 1)
+    ) {
+        throw new RangeError("maxResponseBytes must be a positive safe integer");
     }
 
     return resolved;
@@ -93,14 +166,17 @@ export async function fetchPage(
         }, timeoutMs);
 
         try {
-            await waitForRequestSlot(requestDelayMs);
-
-            const response = await fetch(url, {
-                signal: controller.signal,
-                headers: {
-                    "user-agent": USER_AGENT,
+            const response = await fetchWithRedirectPolicy(
+                url,
+                {
+                    signal: controller.signal,
+                    headers: {
+                        "user-agent": USER_AGENT,
+                    },
                 },
-            });
+                options.allowedRedirectHosts,
+                () => waitForRequestSlot(requestDelayMs)
+            );
 
             if (!response.ok) {
                 throw new HttpError(response.status);
@@ -116,7 +192,7 @@ export async function fetchPage(
                 return null;
             }
 
-            return await response.text();
+            return await readResponseText(response, options.maxResponseBytes);
         } catch (error) {
             const isTimeout = controller.signal.aborted;
             const isHttpError = error instanceof HttpError;
@@ -149,4 +225,40 @@ export async function fetchPage(
     }
 
     throw new Error("Unexpected fetch failure");
+}
+
+export async function readResponseText(
+    response: Response,
+    maxResponseBytes?: number
+): Promise<string> {
+    if (maxResponseBytes === undefined) {
+        return response.text();
+    }
+
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
+        await response.body?.cancel();
+        throw new Error(`Response exceeds the ${maxResponseBytes}-byte limit`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+        return "";
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+        totalBytes += value.byteLength;
+        if (totalBytes > maxResponseBytes) {
+            await reader.cancel();
+            throw new Error(`Response exceeds the ${maxResponseBytes}-byte limit`);
+        }
+        chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString("utf8");
 }

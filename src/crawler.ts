@@ -33,6 +33,8 @@ export type CrawlStats = {
 
 export type CrawlOptions = Partial<CrawlerConfig> & {
     fetchPageOptions?: FetchPageOptions;
+    onProgress?: CrawlProgressListener;
+    shouldCrawlUrl?: (url: string) => boolean;
 };
 
 export type CrawlResult = {
@@ -40,11 +42,19 @@ export type CrawlResult = {
     stats: CrawlStats;
 };
 
+export type CrawlProgress = Omit<CrawlStats, "crawlDurationMs" | "exportPath"> & {
+    completedPages: number;
+};
+
+export type CrawlProgressListener = (progress: CrawlProgress) => void;
+
 const PROGRESS_LOG_INTERVAL = 10;
 
 export class Crawler {
     private readonly config: CrawlerConfig;
     private readonly fetchPageOptions: FetchPageOptions;
+    private readonly onProgress: CrawlProgressListener | undefined;
+    private readonly shouldCrawlUrl: ((url: string) => boolean) | undefined;
     private browserFetcher: BrowserFetcher | undefined;
     private robots: RobotsPolicy | null = null;
     private activeWorkers = 0;
@@ -65,8 +75,15 @@ export class Crawler {
     private crawlInProgress = false;
 
     constructor(options: CrawlOptions = {}) {
-        const { fetchPageOptions = {}, ...configOverrides } = options;
+        const {
+            fetchPageOptions = {},
+            onProgress,
+            shouldCrawlUrl,
+            ...configOverrides
+        } = options;
         this.config = resolveCrawlerConfig(configOverrides);
+        this.onProgress = onProgress;
+        this.shouldCrawlUrl = shouldCrawlUrl;
         this.fetchPageOptions = {
             ...fetchPageOptions,
             requestDelayMs:
@@ -86,7 +103,12 @@ export class Crawler {
         try {
             this.resetCrawlState();
             try {
-                this.robots = await getRobotsParser(this.config.startUrl);
+                this.robots = await getRobotsParser(
+                    this.config.startUrl,
+                    undefined,
+                    this.fetchPageOptions.allowedRedirectHosts,
+                    this.fetchPageOptions.maxResponseBytes
+                );
             } catch (error) {
                 const message =
                     error instanceof Error ? error.message : String(error);
@@ -236,7 +258,9 @@ export class Crawler {
                     const normalizedUrl = normalizeUrl(href, url);
                     if (
                         !normalizedUrl ||
-                        new URL(normalizedUrl).hostname !== startDomain
+                         new URL(normalizedUrl).hostname !== startDomain ||
+                         (this.shouldCrawlUrl !== undefined &&
+                             !this.shouldCrawlUrl(normalizedUrl))
                     ) {
                         continue;
                     }
@@ -300,6 +324,17 @@ export class Crawler {
                 this.crawlStats.scrapedPages +
                 this.crawlStats.failedPages +
                 this.crawlStats.skippedPages;
+            try {
+                this.onProgress?.({
+                    ...this.crawlStats,
+                    completedPages,
+                    activeWorkers: this.activeWorkers,
+                    outstandingTasks: this.outstandingTasks,
+                });
+            } catch (error) {
+                console.error("Crawl progress listener failed", error);
+            }
+
             if (completedPages % PROGRESS_LOG_INTERVAL === 0) {
                 console.log("Crawl progress:", {
                     completedPages,

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: web-crawler-dashboard
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:web
+    envVars:
+      - key: PUBLIC_DEPLOYMENT
+        value: "true"
+      - key: PUBLIC_ORIGIN
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: CRAWL_ALLOWED_HOSTS
+        sync: false

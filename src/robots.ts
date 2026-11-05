@@ -1,5 +1,10 @@
 import { createRequire } from "node:module";
-import { HttpError, USER_AGENT } from "./fetcher.js";
+import {
+    fetchWithRedirectPolicy,
+    HttpError,
+    readResponseText,
+    USER_AGENT,
+} from "./fetcher.js";
 
 type RobotsParser = typeof import("robots-parser").default;
 
@@ -12,7 +17,9 @@ const REQUEST_TIMEOUT = 5000;
 
 export async function getRobotsParser(
     startUrl: string,
-    timeoutMs = REQUEST_TIMEOUT
+    timeoutMs = REQUEST_TIMEOUT,
+    allowedRedirectHosts?: readonly string[],
+    maxResponseBytes?: number
 ): Promise<RobotsPolicy | null> {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
         throw new RangeError("timeoutMs must be a positive number");
@@ -26,12 +33,16 @@ export async function getRobotsParser(
     }, timeoutMs);
 
     try {
-        const response = await fetch(robotsUrl, {
-            signal: controller.signal,
-            headers: {
-                "user-agent": USER_AGENT,
+        const response = await fetchWithRedirectPolicy(
+            robotsUrl,
+            {
+                signal: controller.signal,
+                headers: {
+                    "user-agent": USER_AGENT,
+                },
             },
-        });
+            allowedRedirectHosts
+        );
 
         if (response.status === 404) {
             console.log("robots.txt returned 404; proceeding without robots rules");
@@ -42,7 +53,7 @@ export async function getRobotsParser(
             throw new HttpError(response.status);
         }
 
-        const robotsText = await response.text();
+        const robotsText = await readResponseText(response, maxResponseBytes);
 
         return robotsParser(robotsUrl, robotsText);
     } catch (error) {

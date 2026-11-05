@@ -30,6 +30,8 @@ npm run build
 
 Tests use Vitest. Browser integration tests use controlled local pages, not public websites. There is no linter configured; do not add one without discussing the change first.
 
+Dashboard API and browser UI tests also use local test servers. The browser UI tests require the Playwright Chromium installation described above.
+
 ## Code and test expectations
 
 - Follow the existing TypeScript style and module structure.

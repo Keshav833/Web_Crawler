@@ -1,6 +1,8 @@
 export { Crawler, crawl } from "./crawler.js";
 export type {
     CrawlOptions,
+    CrawlProgress,
+    CrawlProgressListener,
     CrawlResult,
     CrawlStats,
 } from "./crawler.js";

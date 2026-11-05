@@ -10,13 +10,16 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "public"
   ],
   "type": "module",
   "description": "A configurable TypeScript crawler with HTTP and optional Playwright backends, robots.txt support, and JSON/CSV exports.",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "crawl": "tsx src/cli.ts",
+    "web": "tsx src/web.ts",
+    "start:web": "node dist/web.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

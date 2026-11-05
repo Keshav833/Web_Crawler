@@ -48,6 +48,70 @@ describe("fetchPage", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    it("follows redirects only within the configured HTTPS host policy", async () => {
+        const redirectUrl = "https://example.com/next";
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(
+                new Response(null, {
+                    status: 302,
+                    headers: { location: redirectUrl },
+                })
+            )
+            .mockResolvedValueOnce(htmlResponse());
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(
+            fetchPage(pageUrl, {
+                requestDelayMs: 0,
+                allowedRedirectHosts: ["example.com"],
+            })
+        ).resolves.toBe("<html>page</html>");
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenNthCalledWith(
+            1,
+            expect.any(URL),
+            expect.objectContaining({ redirect: "manual" })
+        );
+    });
+
+    it("blocks redirects to hosts outside the public crawl policy", async () => {
+        const fetchMock = vi.fn(async () =>
+            new Response(null, {
+                status: 302,
+                headers: { location: "http://127.0.0.1:8080/private" },
+            })
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(
+            fetchPage(pageUrl, {
+                maxAttempts: 1,
+                requestDelayMs: 0,
+                allowedRedirectHosts: ["example.com"],
+            })
+        ).rejects.toThrow("outside the configured crawl host policy");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops reading an HTML response that exceeds the configured size limit", async () => {
+        const fetchMock = vi.fn(async () =>
+            new Response("<html>oversized</html>", {
+                headers: { "content-type": "text/html" },
+            })
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        await expect(
+            fetchPage(pageUrl, {
+                maxAttempts: 1,
+                requestDelayMs: 0,
+                maxResponseBytes: 10,
+            })
+        ).rejects.toThrow("Response exceeds the 10-byte limit");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it.each([429, 503])("retries HTTP %s and succeeds on the next attempt", async (status) => {
         const fetchMock = vi
             .fn()

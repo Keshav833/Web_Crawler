@@ -55,6 +55,32 @@ Run the crawler with the default start URL and settings:
 npm run crawl
 ```
 
+To use the local dashboard instead of the CLI, start the web interface:
+
+```bash
+npm run web
+```
+
+Open `http://127.0.0.1:3000` in your browser. The dashboard shows crawl progress and page data and provides JSON and CSV downloads. Stop the local server with Ctrl+C. By default, the server binds to loopback and cannot be reached from other machines.
+
+The dashboard offers the core crawl settings, live progress and statistics, a searchable/sortable results table, and a detail view for each page. Results remain in memory until a new crawl starts or the server stops; the crawler also writes its JSON results to `results.json` in the server's working directory.
+
+## Public deployment on Render
+
+The public deployment is opt-in and intentionally more restricted than local use. It requires a crawl password and an explicit hostname allowlist, accepts HTTPS targets only, limits crawls to depth 3, 100 pages, 2 workers, and at least 1 second between requests, caps each HTML response at 1 MB, and disables browser mode. It also limits redirects to the approved crawl hostname. Keep the allowlist to public sites you own or are authorized to crawl; the crawler still checks `robots.txt`.
+
+1. Push the repository to GitHub, then create a Render Blueprint using the repository's `render.yaml`.
+2. Set the required environment variables when prompted:
+   - `PUBLIC_DEPLOYMENT`: `true` (set by the Blueprint)
+   - `PUBLIC_ORIGIN`: the exact HTTPS origin Render assigns, such as `https://web-crawler-dashboard.onrender.com`
+   - `DASHBOARD_PASSWORD`: a strong random password of at least 20 bytes. Generate one locally with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"` and keep it in Render's environment settings, not in Git.
+   - `CRAWL_ALLOWED_HOSTS`: comma-separated hostnames only, without schemes or paths, for example `books.toscrape.com`
+3. Render builds with `npm ci && npm run build` and starts with `npm run start:web`. Visit the Render HTTPS URL; visitors can view the dashboard and results, but must enter the password to start a crawl.
+
+The dashboard binds to all interfaces only when `PUBLIC_DEPLOYMENT=true`. It validates the configured public origin and forwarded HTTPS requests. Do not remove the password, hostname allowlist, or crawl limits, and do not publish secrets in issues or logs. Crawls and results are in memory and disappear when the service restarts; the filesystem may also be ephemeral. Anyone who can access the public dashboard can see the current crawl's results and status. Render plan availability, sleep behavior, and resource limits depend on the selected plan.
+
+Local use remains loopback-only unless `PUBLIC_DEPLOYMENT=true` and all public settings are configured.
+
 Or specify a target and output:
 
 ```bash
@@ -170,6 +196,8 @@ src/
   config.ts               CLI parsing, defaults, and validation
   crawler.ts              Queue, workers, robots checks, and crawl statistics
   fetcher.ts              HTTP fetching, retries, and shared request pacing
+  web-server.ts           Local dashboard API and opt-in restricted public mode
+  web.ts                  Dashboard server entry point
   index.ts                Public library exports
   parser.ts               HTML extraction using Cheerio
   robots.ts               robots.txt retrieval and policy
@@ -178,7 +206,9 @@ src/
   types.ts                Shared page-result type
   exporters/              JSON and CSV serialization and file writing
 tests/                    Vitest unit and integration tests
+public/                   Local dashboard HTML, CSS, and browser-side JavaScript
 .github/                  CI workflow and contribution templates
+render.yaml               Render Blueprint for the public dashboard deployment
 CONTRIBUTING.md           Development and contribution guidance
 LICENSE                   ISC license
 ```

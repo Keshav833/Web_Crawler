@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101714">
+    <meta name="description" content="A dashboard for the TypeScript web crawler.">
+    <title>Fieldnotes — Web Crawler</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Fieldnotes dashboard">
+        <span class="brand-mark" aria-hidden="true">F</span>
+        <span>fieldnotes<span class="brand-dot">.</span></span>
+      </a>
+      <div class="topbar-meta">
+        <span id="workspace-indicator" class="local-indicator"><span class="live-dot"></span> Local workspace</span>
+        <a class="repo-link" href="https://github.com/Keshav833/Web_Crawler" target="_blank" rel="noreferrer">Repository <span aria-hidden="true">↗</span></a>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="intro">
+        <div>
+          <p class="eyebrow">WEB CRAWLER <span> / </span> WORKSPACE</p>
+          <h1>Make the web <span>make sense.</span></h1>
+          <p class="intro-copy">Explore a site, collect its story, and bring the data back with you.</p>
+        </div>
+        <div class="intro-note">
+          <span class="note-icon" aria-hidden="true">↳</span>
+          Crawls run on the dashboard server.<br>Respect site policies and crawl responsibly.
+        </div>
+      </section>
+
+      <section class="workspace-grid" aria-label="Crawler workspace">
+        <aside class="control-panel panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">01 — CONFIGURE</p>
+              <h2>New crawl</h2>
+            </div>
+            <span class="step-badge">01</span>
+          </div>
+
+          <form id="crawl-form">
+            <label class="field-label" for="start-url">Starting URL</label>
+            <div class="url-input-wrap">
+              <span aria-hidden="true">↗</span>
+              <input id="start-url" name="startUrl" type="url" value="https://books.toscrape.com/" placeholder="https://example.com" required autocomplete="url">
+            </div>
+
+            <div class="form-grid">
+              <div>
+                <label class="field-label" for="max-depth">Crawl depth</label>
+                <input id="max-depth" name="maxDepth" type="number" min="0" max="10" value="2" required>
+              </div>
+              <div>
+                <label class="field-label" for="max-pages">Page limit</label>
+                <input id="max-pages" name="maxPages" type="number" min="1" max="10000" value="1000" required>
+              </div>
+              <div>
+                <label class="field-label" for="concurrency">Workers</label>
+                <input id="concurrency" name="concurrency" type="number" min="1" max="10" value="3" required>
+              </div>
+              <div>
+                <label class="field-label" for="delay">Request delay <span>(ms)</span></label>
+                <input id="delay" name="requestDelayMs" type="number" min="100" step="100" value="1000" required>
+              </div>
+            </div>
+
+            <label class="field-label" for="mode">Fetching mode</label>
+            <select id="mode" name="mode">
+              <option value="http">HTTP — fast, default</option>
+              <option value="browser">Browser — JavaScript rendering</option>
+            </select>
+            <p class="field-hint">Browser mode needs Playwright Chromium and is limited to 3 workers.</p>
+
+            <div id="navigation-timeout-row" class="hidden">
+              <label class="field-label" for="navigation-timeout">Navigation timeout <span>(ms)</span></label>
+              <input id="navigation-timeout" name="navigationTimeoutMs" type="number" min="1" max="120000" value="10000">
+            </div>
+
+            <div id="crawl-password-row" class="hidden">
+              <label class="field-label" for="crawl-password">Crawl authorization password</label>
+              <input id="crawl-password" name="crawlPassword" type="password" autocomplete="current-password">
+              <p class="field-hint">Required to start a crawl. Do not share this password.</p>
+            </div>
+
+            <div class="policy-note">
+              <span aria-hidden="true">ⓘ</span>
+              <p>Only crawl sites you’re authorized to access. The crawler checks <code>robots.txt</code> and stays on the starting hostname.</p>
+            </div>
+
+            <button id="start-button" class="primary-button" type="submit">
+              <span class="button-icon" aria-hidden="true">↗</span>
+              <span>Start crawling</span>
+              <span class="button-arrow" aria-hidden="true">→</span>
+            </button>
+          </form>
+        </aside>
+
+        <section class="results-column" aria-label="Crawl results">
+          <section class="status-panel panel">
+            <div class="status-heading">
+              <div>
+                <p class="eyebrow">02 — LIVE SESSION</p>
+                <h2 id="session-title">Ready when you are</h2>
+              </div>
+              <span id="state-pill" class="state-pill state-idle"><span class="state-dot"></span><span id="state-label">IDLE</span></span>
+            </div>
+            <div class="progress-track" role="progressbar" aria-label="Pages processed relative to the configured page limit" aria-valuemin="0" aria-valuemax="1000" aria-valuenow="0">
+              <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <div class="progress-caption">
+              <span id="progress-summary">Enter a URL and start your first crawl.</span>
+              <span id="progress-percent">0 / 1,000</span>
+            </div>
+            <div id="error-message" class="error-message hidden" role="alert"></div>
+          </section>
+
+          <section class="stats-grid" aria-label="Crawl statistics">
+            <article class="stat-card panel">
+              <span class="stat-label">Pages scraped</span>
+              <strong id="stat-scraped">—</strong>
+              <span class="stat-foot"><span class="stat-mark green"></span>Successfully parsed</span>
+            </article>
+            <article class="stat-card panel">
+              <span class="stat-label">URLs discovered</span>
+              <strong id="stat-discovered">—</strong>
+              <span class="stat-foot">Unique links may be fewer</span>
+            </article>
+            <article class="stat-card panel">
+              <span class="stat-label">Still in queue</span>
+              <strong id="stat-outstanding">—</strong>
+              <span class="stat-foot">Queued + processing</span>
+            </article>
+            <article class="stat-card panel">
+              <span class="stat-label">Failed / skipped</span>
+              <strong id="stat-outcomes">—</strong>
+              <span class="stat-foot"><span id="stat-max-workers">Max workers: —</span></span>
+            </article>
+          </section>
+
+          <section class="data-panel panel">
+            <div class="data-heading">
+              <div>
+                <p class="eyebrow">03 — EXTRACTED DATA</p>
+                <h2>Your crawl, at a glance</h2>
+              </div>
+              <div class="download-actions">
+                <a id="download-csv" class="download-button disabled" href="/api/download?format=csv" aria-disabled="true">↓ <span>CSV</span></a>
+                <a id="download-json" class="download-button disabled" href="/api/download?format=json" aria-disabled="true">↓ <span>JSON</span></a>
+              </div>
+            </div>
+            <div class="table-toolbar">
+              <label class="search-box">
+                <span aria-hidden="true">⌕</span>
+                <input id="search" type="search" placeholder="Search title, URL, description…" aria-label="Search crawl results" disabled>
+              </label>
+              <label class="sort-control" for="sort-by">Sort
+                <select id="sort-by" disabled>
+                  <option value="title">Title</option>
+                  <option value="url">URL</option>
+                  <option value="links">Link count</option>
+                </select>
+              </label>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th scope="col">PAGE</th><th scope="col">DESCRIPTION</th><th scope="col">HEADINGS</th><th scope="col">LINKS</th><th scope="col"><span class="sr-only">Details</span></th></tr>
+                </thead>
+                <tbody id="results-body">
+                  <tr class="empty-row"><td colspan="5"><div class="empty-state"><span class="empty-icon" aria-hidden="true">⌁</span><strong>No pages yet</strong><span>Your extracted pages will appear here when the crawl completes.</span></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="table-footer">
+              <span id="result-count">Waiting for results</span>
+              <span>Click a page to inspect its extracted details</span>
+            </div>
+          </section>
+        </section>
+      </section>
+      <footer class="page-footer"><span>FIELDNOTES <span class="brand-dot">•</span> LOCAL CRAWLER DASHBOARD</span><span>HTTP by default · Playwright optional</span></footer>
+    </main>
+
+    <dialog id="detail-dialog" class="detail-dialog">
+      <form method="dialog"><button class="dialog-close" aria-label="Close details">×</button></form>
+      <p class="eyebrow">PAGE DETAILS</p>
+      <h2 id="detail-title"></h2>
+      <a id="detail-url" class="detail-url" target="_blank" rel="noreferrer"></a>
+      <p id="detail-description" class="detail-description"></p>
+      <div class="detail-section"><h3>Headings</h3><ul id="detail-headings"></ul></div>
+      <div class="detail-meta"><span id="detail-links"></span><span id="detail-host"></span></div>
+    </dialog>
+  </body>
+</html>
