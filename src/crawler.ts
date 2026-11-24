@@ -174,9 +174,9 @@ export class Crawler {
                     performance.now() - crawlStartedAt
                 ),
                 exportPath: this.config.outputPath,
-                errorStats: this.config.includeErrorDetails
-                    ? this.errorTracker.getStats()
-                    : undefined,
+                ...(this.config.includeErrorDetails
+                    ? { errorStats: this.errorTracker.getStats() }
+                    : {}),
             };
 
             console.log("Crawling finished.", stats);
@@ -356,7 +356,7 @@ export class Crawler {
                     headings: [],
                     linksCount: 0,
                     crawledAt: Date.now(),
-                    statusCode,
+                    statusCode: statusCode ?? undefined,
                     error:
                         error instanceof Error
                             ? error.message

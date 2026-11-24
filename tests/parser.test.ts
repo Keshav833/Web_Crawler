@@ -23,6 +23,7 @@ describe("parsePage", () => {
                 description: "A description",
                 headings: ["Main heading", "Section"],
                 linksCount: 2,
+                crawledAt: expect.any(Number),
             },
             links: ["/one", "/two"],
         });

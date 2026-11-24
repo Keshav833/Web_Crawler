@@ -55,6 +55,7 @@ describe.skipIf(!databaseUrl)("PostgresCrawlJobStore", () => {
             description: "",
             headings: ["Home"],
             linksCount: 0,
+            crawledAt: Date.now(),
         }];
         const stats = {
             discoveredUrls: 1,

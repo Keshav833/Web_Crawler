@@ -83,7 +83,7 @@ export class ErrorTracker {
             existing.retriedCount++;
             existing.timestamp = Date.now();
             existing.message = message;
-            existing.statusCode = statusCode;
+            existing.statusCode = statusCode ?? undefined;
             existing.errorType = errorType;
         } else {
             if (this.errors.size >= this.maxErrors) {
@@ -96,7 +96,7 @@ export class ErrorTracker {
 
             this.errors.set(url, {
                 url,
-                statusCode,
+                statusCode: statusCode ?? undefined,
                 errorType,
                 message,
                 timestamp: Date.now(),

@@ -1,4 +1,3 @@
-import { fetch, type RequestInfo, type RequestInit } from "node:fetch";
 import * as zlib from "node:zlib";
 
 type SitemapEntry = {
@@ -72,13 +71,13 @@ async function fetchWithAutoDecompress(
     url: string,
     options: RequestInit = {}
 ): Promise<Response> {
-    const response = await fetch(url as RequestInfo, {
+    const response = await fetch(url, {
         ...options,
         headers: {
             "Accept-Encoding": "gzip, deflate",
             ...options.headers,
         },
-        timeout: 10_000,
+        signal: AbortSignal.timeout(10_000),
     });
 
     if (!response.ok) {
@@ -95,7 +94,7 @@ async function fetchWithAutoDecompress(
             });
         });
         // Create a new Response-like object with decompressed content
-        return new Response(decompressed, {
+        return new Response(new Uint8Array(decompressed), {
             status: response.status,
             statusText: response.statusText,
             headers: response.headers,
@@ -117,7 +116,7 @@ function parseSitemapXml(xml: string): string[] {
         const urlPattern = /<url>\s*<loc>(.*?)<\/loc>/gs;
         let match;
         while ((match = urlPattern.exec(xml)) !== null) {
-            const url = match[1].trim();
+            const url = match[1]?.trim();
             if (url) {
                 urls.push(url);
             }
@@ -126,7 +125,7 @@ function parseSitemapXml(xml: string): string[] {
         // Extract sitemap URLs from <sitemap> tags (sitemap index)
         const sitemapPattern = /<sitemap>\s*<loc>(.*?)<\/loc>/gs;
         while ((match = sitemapPattern.exec(xml)) !== null) {
-            const sitemapUrl = match[1].trim();
+            const sitemapUrl = match[1]?.trim();
             if (sitemapUrl) {
                 // Recursively fetch nested sitemaps (but limit depth to prevent loops)
                 // This would be handled by the caller in a queue-based approach

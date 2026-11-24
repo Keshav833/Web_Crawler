@@ -13,6 +13,7 @@ const sampleResult: PageResult = {
     description: "first line\r\nsecond line",
     headings: ["One", "Two"],
     linksCount: 2,
+    crawledAt: Date.now(),
 };
 
 describe("exporters", () => {
