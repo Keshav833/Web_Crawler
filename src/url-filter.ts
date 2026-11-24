@@ -1,24 +1,21 @@
+import type { UrlFilterConfig } from "./types.js";
+
 /**
  * URL filtering system for including/excluding URLs based on patterns
  */
-
-export interface UrlFilterConfig {
-    includePatterns?: string[]; // Regex patterns to include
-    excludePatterns?: string[]; // Regex patterns to exclude
-}
 
 export class UrlFilter {
     private includeRegexes: RegExp[] = [];
     private excludeRegexes: RegExp[] = [];
 
     constructor(config?: UrlFilterConfig) {
-        if (config?.includePatterns) {
-            this.includeRegexes = config.includePatterns.map(
+        if (config?.include) {
+            this.includeRegexes = config.include.map(
                 (p) => new RegExp(p)
             );
         }
-        if (config?.excludePatterns) {
-            this.excludeRegexes = config.excludePatterns.map(
+        if (config?.exclude) {
+            this.excludeRegexes = config.exclude.map(
                 (p) => new RegExp(p)
             );
         }
@@ -88,12 +85,12 @@ export class UrlFilter {
 export const URL_FILTER_PRESETS = {
     // Include only product pages
     productsOnly: {
-        includePatterns: ["/product", "/item", "/goods"],
+        include: ["/product", "/item", "/goods"],
     },
 
     // Exclude admin and system paths
     noAdmin: {
-        excludePatterns: [
+        exclude: [
             "/admin",
             "/dashboard",
             "/api",
@@ -104,7 +101,7 @@ export const URL_FILTER_PRESETS = {
 
     // Exclude common non-content paths
     noSystemPaths: {
-        excludePatterns: [
+        exclude: [
             "/search",
             "/filter",
             "/sort",
@@ -117,12 +114,12 @@ export const URL_FILTER_PRESETS = {
 
     // Blog posts only
     blogOnly: {
-        includePatterns: ["/blog", "/post", "/article"],
+        include: ["/blog", "/post", "/article"],
     },
 
     // Exclude media files and archives
     noMedia: {
-        excludePatterns: [
+        exclude: [
             "\\.(jpg|jpeg|png|gif|svg|webp|pdf|zip|rar|7z|exe|dmg)$",
         ],
     },

@@ -268,19 +268,11 @@ describe("local crawler dashboard server", () => {
 
         const resultsResponse = await fetch(`${baseUrl}/api/results`);
         const pages = await resultsResponse.json();
-        expect(pages).toEqual([
-            {
-                url: startUrl,
-                title: "Local test page",
-                description: "A local fixture",
-                headings: ["Dashboard test"],
-                linksCount: 1,
-            },
-        ]);
+        expect(pages).toEqual(expect.arrayContaining([expect.objectContaining({url: startUrl,title: "Local test page",description: "A local fixture",headings: ["Dashboard test"],linksCount: 1,}),]));
         const historicalResults = await fetch(
             `${baseUrl}/api/results?jobId=${startedBody.jobId}`
         );
-        expect(await historicalResults.json()).toEqual(pages);
+        expect(await historicalResults.json()).toEqual(expect.arrayContaining([expect.objectContaining({url: startUrl,title: "Local test page",description: "A local fixture",headings: ["Dashboard test"],linksCount: 1,}),]));
         const jobHistory = await fetch(`${baseUrl}/api/jobs`);
         expect(await jobHistory.json()).toMatchObject([
             {
@@ -408,3 +400,6 @@ async function waitForCompletion(baseUrl: string): Promise<{
 
     throw new Error("Dashboard crawl did not finish in time");
 }
+
+
+

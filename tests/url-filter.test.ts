@@ -17,7 +17,7 @@ describe("UrlFilter", () => {
 
         it("includes only URLs matching include patterns", () => {
             const filter = new UrlFilter({
-                includePatterns: ["^/products/", "^/items/"],
+                include: ["^/products/", "^/items/"],
             });
             expect(filter.shouldInclude("/products/123")).toBe(true);
             expect(filter.shouldInclude("/items/456")).toBe(true);
@@ -27,7 +27,7 @@ describe("UrlFilter", () => {
 
         it("excludes URLs matching exclude patterns", () => {
             const filter = new UrlFilter({
-                excludePatterns: ["^/admin", "^/api", "\\.pdf$"],
+                exclude: ["^/admin", "^/api", "\\.pdf$"],
             });
             expect(filter.shouldInclude("/products/page")).toBe(true);
             expect(filter.shouldInclude("/admin/users")).toBe(false);
@@ -37,8 +37,8 @@ describe("UrlFilter", () => {
 
         it("applies both include and exclude patterns", () => {
             const filter = new UrlFilter({
-                includePatterns: ["^/products/"],
-                excludePatterns: ["restricted"],
+                include: ["^/products/"],
+                exclude: ["restricted"],
             });
             expect(filter.shouldInclude("/products/item1")).toBe(true);
             expect(filter.shouldInclude("/products/restricted-item")).toBe(false);
@@ -49,7 +49,7 @@ describe("UrlFilter", () => {
     describe("filter", () => {
         it("filters a list of URLs", () => {
             const filter = new UrlFilter({
-                excludePatterns: ["^/admin"],
+                exclude: ["^/admin"],
             });
             const urls = [
                 "/products/1",

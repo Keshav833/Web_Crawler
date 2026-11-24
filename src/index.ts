@@ -7,7 +7,7 @@ export type {
     CrawlStats,
 } from "./crawler.js";
 export type { CrawlerConfig } from "./config.js";
-export type { PageResult, ExtractionConfig, StructuredData, ErrorLog } from "./types.js";
+export type { PageResult, ExtractionConfig, StructuredData, ErrorLog, UrlFilterConfig } from "./types.js";
 
 // New exports for enhanced features
 export { ErrorTracker, categorizeError, isRetryableError } from "./error-tracker.js";

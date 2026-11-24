@@ -1,4 +1,4 @@
-import type { ErrorLog } from "./types.js";
+﻿import type { ErrorLog } from "./types.js";
 
 export type ErrorCategory = "timeout" | "network" | "parse" | "4xx" | "5xx" | "other";
 
@@ -23,8 +23,9 @@ export function categorizeError(error: unknown): ErrorCategory {
         return "other";
     }
 
+    // Convert to lowercase for case-insensitive matching
     const errorMessage =
-        error instanceof Error ? error.message : String(error).toLowerCase();
+        (error instanceof Error ? error.message : String(error)).toLowerCase();
 
     if (
         errorMessage.includes("timeout") ||
@@ -35,6 +36,8 @@ export function categorizeError(error: unknown): ErrorCategory {
     if (
         errorMessage.includes("econnrefused") ||
         errorMessage.includes("enotfound") ||
+        errorMessage.includes("econnreset") ||
+        errorMessage.includes("etimedout") ||
         errorMessage.includes("network")
     ) {
         return "network";
@@ -174,7 +177,7 @@ export function isRetryableError(error: unknown, statusCode?: number): boolean {
     }
 
     const errorMessage =
-        error instanceof Error ? error.message : String(error).toLowerCase();
+        (error instanceof Error ? error.message : String(error)).toLowerCase();
 
     // Network errors are retryable
     if (
