@@ -25,8 +25,8 @@ describe("Error Tracker", () => {
 
             const errors = tracker.getErrors();
             expect(errors).toHaveLength(2);
-            expect(errors[0].errorType).toBe("4xx");
-            expect(errors[1].errorType).toBe("5xx");
+            expect(errors[0]!.errorType).toBe("4xx");
+            expect(errors[1]!.errorType).toBe("5xx");
         });
 
         it("tracks retry count", () => {
@@ -36,7 +36,7 @@ describe("Error Tracker", () => {
 
             const errors = tracker.getErrors();
             expect(errors).toHaveLength(1);
-            expect(errors[0].retriedCount).toBe(2);
+            expect(errors[0]!.retriedCount).toBe(2);
         });
     });
 
@@ -59,7 +59,7 @@ describe("Error Tracker", () => {
 
             const timeoutErrors = tracker.getErrorsByType("timeout");
             expect(timeoutErrors).toHaveLength(1);
-            expect(timeoutErrors[0].url).toBe("https://example.com/1");
+            expect(timeoutErrors[0]!.url).toBe("https://example.com/1");
         });
     });
 
@@ -89,8 +89,8 @@ describe("Error Tracker", () => {
 
             const topErrors = tracker.getTopErrors(1);
             expect(topErrors).toHaveLength(1);
-            expect(topErrors[0].url).toBe("https://example.com/1");
-            expect(topErrors[0].retriedCount).toBe(2);
+            expect(topErrors[0]!.url).toBe("https://example.com/1");
+            expect(topErrors[0]!.retriedCount).toBe(2);
         });
     });
 
@@ -160,3 +160,4 @@ describe("isRetryableError", () => {
         expect(isRetryableError(new Error("unknown error"))).toBe(false);
     });
 });
+

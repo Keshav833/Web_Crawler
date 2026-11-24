@@ -1,9 +1,8 @@
-﻿import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { crawl } from "../src/index.js";
-import type { RequestInfo } from "node:fetch";
 
 async function loadFreshCrawler() {
     // Clear module cache to reload fresh
@@ -177,3 +176,4 @@ describe("export", () => {
         }
     });
 });
+
