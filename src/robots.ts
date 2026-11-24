@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import {
+    DEFAULT_MAX_RESPONSE_BYTES,
     fetchWithRedirectPolicy,
     HttpError,
     readResponseText,
@@ -19,7 +20,7 @@ export async function getRobotsParser(
     startUrl: string,
     timeoutMs = REQUEST_TIMEOUT,
     allowedRedirectHosts?: readonly string[],
-    maxResponseBytes?: number
+    maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES
 ): Promise<RobotsPolicy | null> {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
         throw new RangeError("timeoutMs must be a positive number");

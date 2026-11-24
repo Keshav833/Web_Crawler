@@ -5,6 +5,8 @@ services:
     buildCommand: npm ci && npm run build
     startCommand: npm run start:web
     envVars:
+      - key: NODE_VERSION
+        value: "22"
       - key: PUBLIC_DEPLOYMENT
         value: "true"
       - key: PUBLIC_ORIGIN
@@ -12,4 +14,6 @@ services:
       - key: DASHBOARD_PASSWORD
         sync: false
       - key: CRAWL_ALLOWED_HOSTS
+        sync: false
+      - key: DATABASE_URL
         sync: false

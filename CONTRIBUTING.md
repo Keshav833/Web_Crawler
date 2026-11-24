@@ -32,6 +32,8 @@ Tests use Vitest. Browser integration tests use controlled local pages, not publ
 
 Dashboard API and browser UI tests also use local test servers. The browser UI tests require the Playwright Chromium installation described above.
 
+The PostgreSQL job-store integration tests run when `DATABASE_URL` points to a test database. They are enabled in CI with an isolated PostgreSQL service; avoid pointing them at a database containing data you need to keep.
+
 ## Code and test expectations
 
 - Follow the existing TypeScript style and module structure.

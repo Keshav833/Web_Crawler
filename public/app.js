@@ -24,6 +24,7 @@ const startUrlInput = document.querySelector("#start-url");
 let pages = [];
 let currentState = "idle";
 let pollTimer;
+let currentJobId = null;
 
 const numberFormat = new Intl.NumberFormat();
 
@@ -230,9 +231,15 @@ function setDownloadsEnabled(enabled) {
 }
 
 async function loadResults() {
-  const response = await fetch("/api/results", { cache: "no-store" });
+  const query = currentJobId
+    ? `?jobId=${encodeURIComponent(currentJobId)}`
+    : "";
+  const response = await fetch(`/api/results${query}`, { cache: "no-store" });
   if (!response.ok) throw new Error("The crawl completed, but its results could not be loaded.");
   pages = await response.json();
+  for (const [link, format] of [[downloadCsv, "csv"], [downloadJson, "json"]]) {
+    link.href = `/api/download?format=${format}&jobId=${encodeURIComponent(currentJobId)}`;
+  }
   setDownloadsEnabled(true);
   searchInput.disabled = false;
   sortInput.disabled = false;
@@ -243,6 +250,7 @@ async function refreshStatus() {
   const response = await fetch("/api/status", { cache: "no-store" });
   if (!response.ok) throw new Error("Could not read crawl status from the dashboard server.");
   const status = await response.json();
+  currentJobId = status.jobId;
   setState(status.state);
   renderProgress(status.progress, status.stats);
   setError(status.error);
@@ -284,6 +292,7 @@ form.addEventListener("submit", async (event) => {
   if (pollTimer !== undefined) window.clearTimeout(pollTimer);
   setError("");
   pages = [];
+  currentJobId = null;
   renderPages();
   renderProgress(null, null);
   setDownloadsEnabled(false);
@@ -312,6 +321,7 @@ form.addEventListener("submit", async (event) => {
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "Could not start the crawl.");
+    currentJobId = body.jobId;
     crawlPasswordInput.value = "";
     setState("running");
     pollTimer = window.setTimeout(pollStatus, 300);

@@ -1,3 +1,8 @@
+import { Pool } from "pg";
+import {
+    PostgresCrawlJobStore,
+    type CrawlJobStore,
+} from "./job-store.js";
 import { startWebServer, type PublicWebOptions } from "./web-server.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -28,16 +33,42 @@ function getPublicModeOptions(): PublicWebOptions | undefined {
     };
 }
 
+function getJobStore(): CrawlJobStore | undefined {
+    const connectionString = process.env.DATABASE_URL?.trim();
+    if (!connectionString) {
+        if (process.env.PUBLIC_DEPLOYMENT === "true") {
+            throw new Error("DATABASE_URL is required for public deployment");
+        }
+        return undefined;
+    }
+
+    const pool = new Pool({
+        connectionString,
+        ...(process.env.PGSSL === "true"
+            ? { ssl: { rejectUnauthorized: true } }
+            : {}),
+    });
+    pool.on("error", (error) => {
+        console.error("Unexpected PostgreSQL pool error", error);
+    });
+    return new PostgresCrawlJobStore(pool);
+}
+
 let publicMode: PublicWebOptions | undefined;
+let jobStore: CrawlJobStore | undefined;
 try {
     publicMode = getPublicModeOptions();
+    jobStore = getJobStore();
 } catch (error) {
     console.error("Could not configure the crawler dashboard", error);
     process.exitCode = 1;
 }
 
 if (process.exitCode !== 1) {
-    void startWebServer(port, publicMode ? { publicMode } : {})
+    void startWebServer(port, {
+        ...(publicMode ? { publicMode } : {}),
+        ...(jobStore ? { jobStore } : {}),
+    })
         .then(() => {
             const host = publicMode ? "0.0.0.0" : "127.0.0.1";
             console.log(`Crawler dashboard listening on ${host}:${port}`);

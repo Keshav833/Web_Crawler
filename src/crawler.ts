@@ -10,6 +10,9 @@ import { parsePage } from "./parser.js";
 import { getRobotsParser, type RobotsPolicy } from "./robots.js";
 import { normalizeUrl } from "./url.js";
 import type { PageResult } from "./types.js";
+import { ErrorTracker, isRetryableError } from "./error-tracker.js";
+import { UrlFilter } from "./url-filter.js";
+import { discoverSitemapUrls } from "./sitemap.js";
 
 type QueueItem = {
     url: string;
@@ -29,6 +32,7 @@ export type CrawlStats = {
     outstandingTasks: number;
     crawlDurationMs: number;
     exportPath: string;
+    errorStats?: Record<string, number>;
 };
 
 export type CrawlOptions = Partial<CrawlerConfig> & {
@@ -49,6 +53,7 @@ export type CrawlProgress = Omit<CrawlStats, "crawlDurationMs" | "exportPath"> &
 export type CrawlProgressListener = (progress: CrawlProgress) => void;
 
 const PROGRESS_LOG_INTERVAL = 10;
+const MAX_CRAWL_RESULT_BYTES = 50_000_000;
 
 export class Crawler {
     private readonly config: CrawlerConfig;
@@ -71,8 +76,13 @@ export class Crawler {
         maxObservedConcurrency: 0,
     };
     private outstandingTasks = 0;
+    private resultBytes = 0;
+    private resultLimitReached = false;
     private readonly waitingWorkers = new Set<() => void>();
     private crawlInProgress = false;
+    private errorTracker = new ErrorTracker();
+    private urlFilter: UrlFilter | undefined;
+    private sitemapUrls: Set<string> = new Set();
 
     constructor(options: CrawlOptions = {}) {
         const {
@@ -89,6 +99,12 @@ export class Crawler {
             requestDelayMs:
                 fetchPageOptions.requestDelayMs ?? this.config.requestDelayMs,
         };
+
+        // Initialize URL filter if configured
+        if (this.config.urlFilters) {
+            this.urlFilter = new UrlFilter(this.config.urlFilters);
+        }
+
         this.resetCrawlState();
     }
 
@@ -124,6 +140,19 @@ export class Crawler {
             }
 
             const startDomain = new URL(this.config.startUrl).hostname;
+
+            // Discover sitemaps if requested
+            if (this.config.extractionConfig?.followSitemaps) {
+                try {
+                    const origin = new URL(this.config.startUrl).origin;
+                    const sitemapUrls = await discoverSitemapUrls(origin);
+                    sitemapUrls.forEach((url) => this.sitemapUrls.add(url));
+                    console.log(`Discovered ${sitemapUrls.length} URLs from sitemaps`);
+                } catch (error) {
+                    console.warn("Failed to discover sitemaps:", error);
+                }
+            }
+
             await Promise.all(
                 Array.from(
                     { length: this.config.concurrency },
@@ -145,6 +174,9 @@ export class Crawler {
                     performance.now() - crawlStartedAt
                 ),
                 exportPath: this.config.outputPath,
+                errorStats: this.config.includeErrorDetails
+                    ? this.errorTracker.getStats()
+                    : undefined,
             };
 
             console.log("Crawling finished.", stats);
@@ -183,6 +215,8 @@ export class Crawler {
         this.crawlStats.skippedPages = 0;
         this.crawlStats.maxObservedConcurrency = 0;
         this.outstandingTasks = 1;
+        this.resultBytes = 0;
+        this.resultLimitReached = false;
         this.waitingWorkers.clear();
     }
 
@@ -202,6 +236,16 @@ export class Crawler {
 
     private enqueueUrl(item: QueueItem): void {
         if (this.visited.has(item.url) || this.queued.has(item.url)) {
+            return;
+        }
+
+        // Apply URL filter if configured
+        if (this.urlFilter && !this.urlFilter.shouldInclude(item.url)) {
+            return;
+        }
+
+        // Apply custom filter if provided
+        if (this.shouldCrawlUrl && !this.shouldCrawlUrl(item.url)) {
             return;
         }
 
@@ -228,6 +272,9 @@ export class Crawler {
         }
 
         this.visited.add(url);
+        if (this.resultLimitReached) {
+            return "skipped";
+        }
         this.activeWorkers++;
         this.crawlStats.maxObservedConcurrency = Math.max(
             this.crawlStats.maxObservedConcurrency,
@@ -252,7 +299,23 @@ export class Crawler {
                 return "skipped";
             }
 
-            const { result, links } = parsePage(html, url);
+            const { result, links } = parsePage(
+                html,
+                url,
+                this.config.extractionConfig
+            );
+            if (this.resultLimitReached) {
+                return "skipped";
+            }
+            const resultBytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+            if (this.resultBytes + resultBytes > MAX_CRAWL_RESULT_BYTES) {
+                this.resultLimitReached = true;
+                console.error(
+                    `Stopping result collection because the ${MAX_CRAWL_RESULT_BYTES}-byte crawl result limit was reached`
+                );
+                return "failed";
+            }
+
             if (depth < this.config.maxDepth) {
                 for (const href of links) {
                     const normalizedUrl = normalizeUrl(href, url);
@@ -274,8 +337,33 @@ export class Crawler {
             }
 
             this.results.push(result);
+            this.resultBytes += resultBytes;
             return "scraped";
         } catch (error) {
+            const statusCode =
+                error instanceof Error &&
+                "statusCode" in error
+                    ? (error.statusCode as number | undefined)
+                    : undefined;
+
+            this.errorTracker.recordError(url, error, statusCode);
+            if (this.config.includeErrorDetails) {
+                // Add error entry to results if configured
+                const errorResult: PageResult = {
+                    url,
+                    title: "",
+                    description: "",
+                    headings: [],
+                    linksCount: 0,
+                    crawledAt: Date.now(),
+                    statusCode,
+                    error:
+                        error instanceof Error
+                            ? error.message
+                            : String(error),
+                };
+                this.results.push(errorResult);
+            }
             console.error(`Worker ${id} failed to process ${url}`, error);
             return "failed";
         } finally {

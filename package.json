@@ -45,10 +45,12 @@
   },
   "dependencies": {
     "cheerio": "^1.2.0",
+    "pg": "^8.23.1",
     "robots-parser": "^3.0.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^4.1.12"

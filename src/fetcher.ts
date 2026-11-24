@@ -3,6 +3,7 @@ export const USER_AGENT = "MyCrawler/1.0";
 const MAX_ATTEMPTS = 3;
 const REQUEST_TIMEOUT = 5000;
 const REQUEST_DELAY = 1000;
+export const DEFAULT_MAX_RESPONSE_BYTES = 5_000_000;
 
 export type FetchPageOptions = {
     maxAttempts?: number;
@@ -15,10 +16,10 @@ export type FetchPageOptions = {
 export type ResolvedFetchPageOptions = Required<
     Pick<
         FetchPageOptions,
-        "maxAttempts" | "timeoutMs" | "requestDelayMs"
+        "maxAttempts" | "timeoutMs" | "requestDelayMs" | "maxResponseBytes"
     >
 > &
-    Pick<FetchPageOptions, "allowedRedirectHosts" | "maxResponseBytes">;
+    Pick<FetchPageOptions, "allowedRedirectHosts">;
 
 let lastRequestTime = 0;
 let rateLimitQueue: Promise<void> = Promise.resolve();
@@ -119,6 +120,8 @@ export function resolveFetchPageOptions(
         maxAttempts: options.maxAttempts ?? MAX_ATTEMPTS,
         timeoutMs: options.timeoutMs ?? REQUEST_TIMEOUT,
         requestDelayMs: options.requestDelayMs ?? REQUEST_DELAY,
+        maxResponseBytes:
+            options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
     };
 
     if (!Number.isInteger(resolved.maxAttempts) || resolved.maxAttempts < 1) {
@@ -155,7 +158,7 @@ export async function fetchPage(
     url: string,
     options: FetchPageOptions = {}
 ): Promise<string | null> {
-    const { maxAttempts, timeoutMs, requestDelayMs } =
+    const { maxAttempts, timeoutMs, requestDelayMs, maxResponseBytes } =
         resolveFetchPageOptions(options);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -192,7 +195,7 @@ export async function fetchPage(
                 return null;
             }
 
-            return await readResponseText(response, options.maxResponseBytes);
+            return await readResponseText(response, maxResponseBytes);
         } catch (error) {
             const isTimeout = controller.signal.aborted;
             const isHttpError = error instanceof HttpError;

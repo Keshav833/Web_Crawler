@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchPage, HttpError, USER_AGENT } from "../src/fetcher.js";
+import {
+    DEFAULT_MAX_RESPONSE_BYTES,
+    fetchPage,
+    HttpError,
+    resolveFetchPageOptions,
+    USER_AGENT,
+} from "../src/fetcher.js";
 
 const pageUrl = "https://example.com/page";
 
@@ -23,6 +29,12 @@ afterEach(() => {
 });
 
 describe("fetchPage", () => {
+    it("uses a default response size limit", async () => {
+        expect(resolveFetchPageOptions().maxResponseBytes).toBe(
+            DEFAULT_MAX_RESPONSE_BYTES
+        );
+    });
+
     it("returns an HTML response body and sends the crawler user-agent", async () => {
         const fetchMock = vi.fn(async () => htmlResponse());
         vi.stubGlobal("fetch", fetchMock);

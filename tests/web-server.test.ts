@@ -28,6 +28,15 @@ describe("local crawler dashboard server", () => {
         expect(page.headers.get("content-type")).toContain("text/html");
         expect(await page.text()).toContain("Start crawling");
 
+        const health = await fetch(`${baseUrl}/healthz`);
+        expect(health.status).toBe(200);
+        expect(await health.json()).toEqual({ status: "ok" });
+
+        const metrics = await fetch(`${baseUrl}/metrics`);
+        expect(metrics.status).toBe(200);
+        expect(metrics.headers.get("content-type")).toContain("text/plain");
+        expect(await metrics.text()).toContain("crawler_process_resident_memory_bytes");
+
         const script = await fetch(`${baseUrl}/app.js`);
         expect(script.status).toBe(200);
         expect(await script.text()).toContain("/api/status");
@@ -231,6 +240,10 @@ describe("local crawler dashboard server", () => {
             }),
         });
         expect(started.status).toBe(202);
+        const startedBody = await started.json() as { jobId: string };
+        expect(startedBody.jobId).toMatch(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        );
 
         const conflictingStart = await fetch(`${baseUrl}/api/crawl`, {
             method: "POST",
@@ -264,9 +277,23 @@ describe("local crawler dashboard server", () => {
                 linksCount: 1,
             },
         ]);
+        const historicalResults = await fetch(
+            `${baseUrl}/api/results?jobId=${startedBody.jobId}`
+        );
+        expect(await historicalResults.json()).toEqual(pages);
+        const jobHistory = await fetch(`${baseUrl}/api/jobs`);
+        expect(await jobHistory.json()).toMatchObject([
+            {
+                id: startedBody.jobId,
+                state: "completed",
+                pages: null,
+            },
+        ]);
+        const invalidHistoryLimit = await fetch(`${baseUrl}/api/jobs?limit=101`);
+        expect(invalidHistoryLimit.status).toBe(400);
 
         const jsonDownload = await fetch(
-            `${baseUrl}/api/download?format=json`
+            `${baseUrl}/api/download?format=json&jobId=${startedBody.jobId}`
         );
         expect(jsonDownload.headers.get("content-disposition")).toContain(
             "crawl-results.json"

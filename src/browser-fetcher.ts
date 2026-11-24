@@ -44,12 +44,17 @@ export class BrowserFetcher {
         url: string,
         options: BrowserFetchPageOptions = {}
     ): Promise<string | null> {
-        const { maxAttempts, timeoutMs, requestDelayMs } =
+        const { maxAttempts, timeoutMs, requestDelayMs, maxResponseBytes } =
             resolveFetchPageOptions(options);
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                return await this.navigate(url, timeoutMs, requestDelayMs);
+                return await this.navigate(
+                    url,
+                    timeoutMs,
+                    requestDelayMs,
+                    maxResponseBytes
+                );
             } catch (error) {
                 const isTimeout =
                     error instanceof Error && error.name === "TimeoutError";
@@ -88,7 +93,8 @@ export class BrowserFetcher {
     private async navigate(
         url: string,
         timeoutMs: number,
-        requestDelayMs: number
+        requestDelayMs: number,
+        maxResponseBytes: number
     ): Promise<string | null> {
         const browser = await this.getBrowser();
         const context = await browser.newContext({ userAgent: USER_AGENT });
@@ -136,7 +142,13 @@ export class BrowserFetcher {
                 return null;
             }
 
-            return await page.content();
+            const html = await page.content();
+            if (Buffer.byteLength(html, "utf8") > maxResponseBytes) {
+                throw new Error(
+                    `Rendered HTML exceeds the ${maxResponseBytes}-byte limit`
+                );
+            }
+            return html;
         } finally {
             await context.close();
         }

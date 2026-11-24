@@ -1,3 +1,5 @@
+import type { ExtractionConfig, UrlFilterConfig } from "./types.js";
+
 export type CrawlerConfig = {
     startUrl: string;
     maxDepth: number;
@@ -8,6 +10,11 @@ export type CrawlerConfig = {
     format: "json" | "csv";
     mode: "http" | "browser";
     navigationTimeoutMs: number;
+    // New extraction and filtering options
+    extractionConfig?: ExtractionConfig;
+    urlFilters?: UrlFilterConfig;
+    resumeJobId?: string; // Resume a previous crawl
+    includeErrorDetails?: boolean; // Include error logs in results
 };
 
 export type CliConfig = CrawlerConfig;

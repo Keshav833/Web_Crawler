@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -8,6 +8,11 @@ import { Crawler, type CrawlProgress, type CrawlResult } from "./crawler.js";
 import { resolveCrawlerConfig, type CrawlerConfig } from "./config.js";
 import { serializeCsv } from "./exporters/csv.js";
 import { serializeJson } from "./exporters/json.js";
+import {
+    ActiveCrawlError,
+    InMemoryCrawlJobStore,
+    type CrawlJobStore,
+} from "./job-store.js";
 
 const WEB_HOST = "127.0.0.1";
 const PUBLIC_WEB_HOST = "0.0.0.0";
@@ -31,13 +36,14 @@ const SECURITY_HEADERS = {
     "x-robots-tag": "noindex, nofollow, noarchive",
 };
 
-type CrawlState = "idle" | "running" | "completed" | "failed";
+type CrawlState = "idle" | "running" | "completed" | "failed" | "interrupted";
 
 type WebStatus = {
     state: CrawlState;
     progress: CrawlProgress | null;
     stats: CrawlResult["stats"] | null;
     error: string | null;
+    jobId: string | null;
 };
 
 export type PublicWebOptions = {
@@ -49,6 +55,7 @@ export type PublicWebOptions = {
 export type WebServerOptions = {
     outputPath?: string;
     publicMode?: PublicWebOptions;
+    jobStore?: CrawlJobStore;
 };
 
 type PasswordAttempt = {
@@ -70,17 +77,24 @@ export function createWebServer(options: WebServerOptions = {}): Server {
     const publicOrigin = options.publicMode
         ? validatePublicOptions(options.publicMode)
         : undefined;
-    let state: CrawlState = "idle";
-    let progress: CrawlProgress | null = null;
-    let result: CrawlResult | null = null;
-    let errorMessage: string | null = null;
+    const jobStore = options.jobStore ?? new InMemoryCrawlJobStore();
+    const workerId = randomUUID();
     const passwordAttempts = new Map<string, PasswordAttempt>();
 
     return createServer((request, response) => {
         void handleRequest(request, response).catch((error: unknown) => {
             console.error("Web server request failed", error);
             if (!response.headersSent) {
-                sendJson(response, 500, { error: "Internal server error" });
+                sendJson(
+                    response,
+                    error instanceof ApiError ? error.statusCode : 500,
+                    {
+                        error:
+                            error instanceof ApiError
+                                ? error.message
+                                : "Internal server error",
+                    }
+                );
             } else {
                 response.destroy();
             }
@@ -91,6 +105,18 @@ export function createWebServer(options: WebServerOptions = {}): Server {
         request: IncomingMessage,
         response: ServerResponse
     ): Promise<void> {
+        const requestUrl = new URL(request.url ?? "/", "http://localhost");
+        if (request.method === "GET" && requestUrl.pathname === "/healthz") {
+            try {
+                await jobStore.healthCheck();
+                sendJson(response, 200, { status: "ok" });
+            } catch (error) {
+                console.error("Health check failed", error);
+                sendJson(response, 503, { status: "unavailable" });
+            }
+            return;
+        }
+
         if (!isAllowedRequest(request, publicOrigin)) {
             sendJson(response, 403, {
                 error: publicOrigin
@@ -99,8 +125,6 @@ export function createWebServer(options: WebServerOptions = {}): Server {
             });
             return;
         }
-
-        const requestUrl = new URL(request.url ?? "/", `http://${request.headers.host}`);
 
         if (request.method === "GET" && requestUrl.pathname === "/") {
             await sendAsset(response, "index.html", "text/html; charset=utf-8");
@@ -124,12 +148,54 @@ export function createWebServer(options: WebServerOptions = {}): Server {
             return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/status") {
+            const job = await jobStore.getLatestJob();
             sendJson(response, 200, {
-                state,
-                progress,
-                stats: result?.stats ?? null,
-                error: errorMessage,
+                state: job?.state ?? "idle",
+                progress: job?.progress ?? null,
+                stats: job?.stats ?? null,
+                error: job?.error ?? null,
+                jobId: job?.id ?? null,
             } satisfies WebStatus);
+            return;
+        }
+        if (request.method === "GET" && requestUrl.pathname === "/api/jobs") {
+            const rawLimit = requestUrl.searchParams.get("limit");
+            const limit = rawLimit === null ? 20 : Number(rawLimit);
+            if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+                sendJson(response, 400, {
+                    error: "limit must be an integer between 1 and 100",
+                });
+                return;
+            }
+            const jobs = await jobStore.listJobs(limit);
+            sendJson(response, 200, jobs);
+            return;
+        }
+        if (request.method === "GET" && requestUrl.pathname === "/metrics") {
+            const job = await jobStore.getLatestJob();
+            const stats = job?.stats ?? job?.progress;
+            const metrics = [
+                "# HELP crawler_process_uptime_seconds Process uptime in seconds.",
+                "# TYPE crawler_process_uptime_seconds gauge",
+                `crawler_process_uptime_seconds ${process.uptime()}`,
+                "# HELP crawler_process_resident_memory_bytes Resident memory in bytes.",
+                "# TYPE crawler_process_resident_memory_bytes gauge",
+                `crawler_process_resident_memory_bytes ${process.memoryUsage().rss}`,
+                "# HELP crawler_active_job Whether a crawl job is running.",
+                "# TYPE crawler_active_job gauge",
+                `crawler_active_job ${job?.state === "running" ? 1 : 0}`,
+                "# HELP crawler_last_job_pages_total Pages processed by outcome for the latest job.",
+                "# TYPE crawler_last_job_pages_total gauge",
+                `crawler_last_job_pages_total{outcome="scraped"} ${stats?.scrapedPages ?? 0}`,
+                `crawler_last_job_pages_total{outcome="failed"} ${stats?.failedPages ?? 0}`,
+                `crawler_last_job_pages_total{outcome="skipped"} ${stats?.skippedPages ?? 0}`,
+            ].join("\n");
+            response.writeHead(200, {
+                "content-type": "text/plain; version=0.0.4; charset=utf-8",
+                "cache-control": "no-store",
+                ...SECURITY_HEADERS,
+            });
+            response.end(`${metrics}\n`);
             return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/crawl") {
@@ -181,7 +247,8 @@ export function createWebServer(options: WebServerOptions = {}): Server {
             return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/results") {
-            if (state !== "completed" || !result) {
+            const job = await getRequestedJob(requestUrl, true);
+            if (!job || job.state !== "completed" || !job.pages) {
                 sendJson(response, 409, { error: "No completed crawl results are available" });
                 return;
             }
@@ -190,11 +257,12 @@ export function createWebServer(options: WebServerOptions = {}): Server {
                 "cache-control": "no-store",
                 ...SECURITY_HEADERS,
             });
-            response.end(serializeJson(result.pages));
+            response.end(serializeJson(job.pages));
             return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/download") {
-            if (state !== "completed" || !result) {
+            const job = await getRequestedJob(requestUrl, true);
+            if (!job || job.state !== "completed" || !job.pages) {
                 sendJson(response, 409, { error: "No completed crawl results are available" });
                 return;
             }
@@ -206,8 +274,8 @@ export function createWebServer(options: WebServerOptions = {}): Server {
 
             const contents =
                 format === "json"
-                    ? serializeJson(result.pages)
-                    : serializeCsv(result.pages);
+                    ? serializeJson(job.pages)
+                    : serializeCsv(job.pages);
             response.writeHead(200, {
                 "content-type":
                     format === "json"
@@ -224,15 +292,21 @@ export function createWebServer(options: WebServerOptions = {}): Server {
         sendJson(response, 404, { error: "Not found" });
     }
 
+    async function getRequestedJob(requestUrl: URL, includePages: boolean) {
+        const jobId = requestUrl.searchParams.get("jobId");
+        if (!jobId) {
+            return jobStore.getLatestJob(includePages);
+        }
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(jobId)) {
+            throw new ApiError(400, "jobId must be a UUID");
+        }
+        return jobStore.getJob(jobId, includePages);
+    }
+
     async function startCrawl(
         request: IncomingMessage,
         response: ServerResponse
     ): Promise<void> {
-        if (state === "running") {
-            sendJson(response, 409, { error: "A crawl is already running" });
-            return;
-        }
-
         let config: CrawlerConfig;
         try {
             config = parseWebConfig(
@@ -247,11 +321,20 @@ export function createWebServer(options: WebServerOptions = {}): Server {
             return;
         }
 
-        result = null;
-        progress = null;
-        errorMessage = null;
-        state = "running";
-        sendJson(response, 202, { state });
+        let jobId: string;
+        try {
+            const job = await jobStore.createJob(config, workerId);
+            jobId = job.id;
+        } catch (error) {
+            if (error instanceof ActiveCrawlError) {
+                sendJson(response, 409, { error: error.message });
+                return;
+            }
+            console.error("Could not create persistent crawl job", error);
+            sendJson(response, 503, { error: "Could not create a crawl job." });
+            return;
+        }
+        sendJson(response, 202, { state: "running", jobId });
 
         const crawler = new Crawler({
             ...config,
@@ -271,27 +354,57 @@ export function createWebServer(options: WebServerOptions = {}): Server {
                   }
                 : {}),
             onProgress: (nextProgress) => {
-                progress = nextProgress;
+                progressWrite = progressWrite.then(async () => {
+                    if (persistenceError === undefined) {
+                        await jobStore.updateProgress(jobId, nextProgress);
+                    }
+                }).catch((error: unknown) => {
+                    persistenceError = error;
+                    console.error(`Could not persist progress for crawl job ${jobId}`, error);
+                });
             },
         });
+        let progressWrite = Promise.resolve();
+        let persistenceError: unknown;
+        const heartbeat = setInterval(() => {
+            void jobStore.heartbeat(workerId).catch((error: unknown) => {
+                console.error(`Crawl job heartbeat failed for ${jobId}`, error);
+            });
+        }, 15_000);
 
         void crawler
             .crawl()
-            .then((crawlResult) => {
-                if (!crawlResult) {
-                    state = "failed";
-                    errorMessage =
-                        "The crawler stopped because robots.txt could not be checked.";
+            .then(async (crawlResult) => {
+                clearInterval(heartbeat);
+                await progressWrite;
+                if (persistenceError !== undefined) {
+                    const detail =
+                        persistenceError instanceof Error
+                            ? persistenceError.message
+                            : String(persistenceError);
+                    await jobStore.failJob(
+                        jobId,
+                        `Could not persist crawl progress: ${detail}`
+                    );
                     return;
                 }
-                result = crawlResult;
-                state = "completed";
+                if (!crawlResult) {
+                    await jobStore.failJob(
+                        jobId,
+                        "The crawler stopped because robots.txt could not be checked."
+                    );
+                    return;
+                }
+                await jobStore.completeJob(jobId, crawlResult);
             })
-            .catch((error: unknown) => {
+            .catch(async (error: unknown) => {
+                clearInterval(heartbeat);
                 console.error("Web crawl failed", error);
-                state = "failed";
-                errorMessage =
+                const message =
                     error instanceof Error ? error.message : String(error);
+                await jobStore.failJob(jobId, message).catch((storeError: unknown) => {
+                    console.error(`Could not record failure for crawl job ${jobId}`, storeError);
+                });
             });
     }
 }
@@ -300,13 +413,22 @@ export async function startWebServer(
     port = 3000,
     options: WebServerOptions = {}
 ): Promise<Server> {
-    const server = createWebServer(options);
-    const host = options.publicMode ? PUBLIC_WEB_HOST : WEB_HOST;
-    await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(port, host, resolve);
-    });
-    return server;
+    const jobStore = options.jobStore ?? new InMemoryCrawlJobStore();
+    try {
+        await jobStore.initialize();
+        const server = createWebServer({ ...options, jobStore });
+        const host = options.publicMode ? PUBLIC_WEB_HOST : WEB_HOST;
+        await new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(port, host, resolve);
+        });
+        return server;
+    } catch (error) {
+        await jobStore.close().catch((closeError: unknown) => {
+            console.error("Could not close the job store after startup failure", closeError);
+        });
+        throw error;
+    }
 }
 
 function isAllowedRequest(request: IncomingMessage, publicOrigin?: URL): boolean {

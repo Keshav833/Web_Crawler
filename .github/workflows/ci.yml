@@ -11,7 +11,27 @@ jobs:
   validate:
     name: Type-check, test, and build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["20.18.1", "22"]
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: crawler
+          POSTGRES_USER: crawler
+          POSTGRES_PASSWORD: crawler
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crawler -d crawler"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://crawler:crawler@localhost:5432/crawler
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -19,7 +39,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
 
       - name: Install dependencies

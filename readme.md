@@ -12,6 +12,7 @@ It brings URL discovery, crawl controls, basic extraction, and export into one r
 
 - Node.js and TypeScript
 - Native `fetch` for the default HTTP backend
+- PostgreSQL for durable dashboard jobs and results when configured
 - Cheerio for HTML parsing
 - Playwright and Chromium as optional browser support
 - Vitest for automated tests
@@ -63,7 +64,7 @@ npm run web
 
 Open `http://127.0.0.1:3000` in your browser. The dashboard shows crawl progress and page data and provides JSON and CSV downloads. Stop the local server with Ctrl+C. By default, the server binds to loopback and cannot be reached from other machines.
 
-The dashboard offers the core crawl settings, live progress and statistics, a searchable/sortable results table, and a detail view for each page. Results remain in memory until a new crawl starts or the server stops; the crawler also writes its JSON results to `results.json` in the server's working directory.
+The dashboard offers the core crawl settings, live progress and statistics, a searchable/sortable results table, and a detail view for each page. Without PostgreSQL, the latest job and results remain in memory until a new crawl starts or the server stops; the crawler also writes its JSON results to `results.json` in the server's working directory.
 
 ## Public deployment on Render
 
@@ -75,11 +76,23 @@ The public deployment is opt-in and intentionally more restricted than local use
    - `PUBLIC_ORIGIN`: the exact HTTPS origin Render assigns, such as `https://web-crawler-dashboard.onrender.com`
    - `DASHBOARD_PASSWORD`: a strong random password of at least 20 bytes. Generate one locally with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"` and keep it in Render's environment settings, not in Git.
    - `CRAWL_ALLOWED_HOSTS`: comma-separated hostnames only, without schemes or paths, for example `books.toscrape.com`
+   - `DATABASE_URL`: the connection string for a PostgreSQL database. Provision the database with a provider and keep its credentials in Render environment settings.
+   - `PGSSL`: optional; set to `true` if the database requires TLS with a certificate trusted by Node.js.
 3. Render builds with `npm ci && npm run build` and starts with `npm run start:web`. Visit the Render HTTPS URL; visitors can view the dashboard and results, but must enter the password to start a crawl.
 
-The dashboard binds to all interfaces only when `PUBLIC_DEPLOYMENT=true`. It validates the configured public origin and forwarded HTTPS requests. Do not remove the password, hostname allowlist, or crawl limits, and do not publish secrets in issues or logs. Crawls and results are in memory and disappear when the service restarts; the filesystem may also be ephemeral. Anyone who can access the public dashboard can see the current crawl's results and status. Render plan availability, sleep behavior, and resource limits depend on the selected plan.
+The dashboard binds to all interfaces only when `PUBLIC_DEPLOYMENT=true`. It validates the configured public origin and forwarded HTTPS requests. Do not remove the password, hostname allowlist, or crawl limits, and do not publish secrets in issues or logs. PostgreSQL stores crawl jobs and completed results across service restarts; the local `results.json` file may still be ephemeral. Anyone who can access the public dashboard can see the current crawl's results and status. Render plan availability, sleep behavior, and resource limits depend on the selected plan.
 
 Local use remains loopback-only unless `PUBLIC_DEPLOYMENT=true` and all public settings are configured.
+
+### Persistent jobs and PostgreSQL
+
+The web dashboard uses in-memory job storage for local development unless `DATABASE_URL` is set. Configure `DATABASE_URL` to a PostgreSQL connection string to persist job state, progress, crawl statistics, and completed results across process restarts. On startup, the server creates the required schema and marks jobs with expired worker leases as interrupted; it does not resume a crawl because its in-memory frontier is not persisted. Only one crawl can be active across processes using the same database.
+
+Public deployment requires `DATABASE_URL`. Set `PGSSL=true` when the database provider requires TLS and its certificate is trusted by Node.js. Do not disable certificate verification to work around certificate errors.
+
+The dashboard exposes `GET /healthz`; it returns `200` only when the configured job store is available. `GET /metrics` exposes Prometheus text-format process memory/uptime and latest-crawl outcome counters. `GET /api/jobs?limit=20` lists recent job metadata (up to 100 records; result payloads are not included). PostgreSQL retains at most 100 terminal job records and prunes records older than 30 days when a new crawl starts. Completed results are stored in JSONB and can be retrieved by job ID from `/api/results?jobId=<id>`; use database backups appropriate for your deployment.
+
+The [Dockerfile](./Dockerfile) builds a production image. Public container deployments must provide the same public-mode environment variables and a PostgreSQL `DATABASE_URL`; do not expose the local in-memory mode on a public network.
 
 Or specify a target and output:
 
@@ -198,6 +211,7 @@ src/
   fetcher.ts              HTTP fetching, retries, and shared request pacing
   web-server.ts           Local dashboard API and opt-in restricted public mode
   web.ts                  Dashboard server entry point
+  job-store.ts            In-memory and PostgreSQL-backed crawl job storage
   index.ts                Public library exports
   parser.ts               HTML extraction using Cheerio
   robots.ts               robots.txt retrieval and policy
@@ -209,6 +223,7 @@ tests/                    Vitest unit and integration tests
 public/                   Local dashboard HTML, CSS, and browser-side JavaScript
 .github/                  CI workflow and contribution templates
 render.yaml               Render Blueprint for the public dashboard deployment
+Dockerfile                Production container image
 CONTRIBUTING.md           Development and contribution guidance
 LICENSE                   ISC license
 ```
@@ -223,8 +238,9 @@ Use this crawler only on public pages or pages you are authorized to access. Rev
 - Only the configured number of unique URLs can be queued, and crawl depth is capped at ten.
 - Extraction is intentionally basic: title, meta description, `h1`/`h2`/`h3` text, and link count.
 - Browser mode requires downloading Chromium and uses more resources than HTTP mode.
-- Response sizes and total crawl memory use are not capped; very large pages or result sets can use substantial memory.
-- The project does not provide a database, sitemap discovery, proxy support, or authentication workflows.
+- HTTP and rendered HTML responses are limited to 5 MB per page by default, and retained crawl results are limited to 50 MB. Public deployment applies its stricter 1 MB response limit.
+- PostgreSQL persistence stores completed results as a JSONB value. This is appropriate for the project's bounded single-crawl use, not a substitute for a high-volume crawl data warehouse.
+- The project does not provide sitemap discovery, proxy support, or per-user accounts.
 - The export writer does not create missing parent directories.
 
 ## Contributing
